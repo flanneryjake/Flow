@@ -19,6 +19,7 @@ API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateC
 # Tried in order. On 2026-09-29 the free key answered on these two; flash-latest
 # was often 503 (busy) and Google Search grounding returned 429 (no free quota).
 MODELS = ["gemini-3.5-flash", "gemini-flash-lite-latest"]
+NO_SEARCH = [False]
 
 PROMPTS = {
     "proofread": (
@@ -44,7 +45,7 @@ def call(model, key, prompt, search):
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json", "x-goog-api-key": key},
     )
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=90) as r:
         data = json.load(r)
     parts = data["candidates"][0]["content"]["parts"]
     return "".join(p.get("text", "") for p in parts)
@@ -54,17 +55,19 @@ def ask(key, prompt, search):
     errors = []
     for model in MODELS:
         # Search first when asked; fall back to plain generation if search has no quota.
-        for use_search in ([True, False] if search else [False]):
+        for use_search in ([True, False] if search and not NO_SEARCH[0] else [False]):
             for attempt in range(2):
                 try:
                     return model, use_search, call(model, key, prompt, use_search)
                 except urllib.error.HTTPError as e:
                     errors.append(f"{model} search={use_search}: HTTP {e.code}")
+                    if use_search and e.code == 429:
+                        NO_SEARCH[0] = True  # no search quota; don't retry it on the next model
                     if e.code == 503 and attempt == 0:
                         time.sleep(5)
                         continue
                     break
-                except (urllib.error.URLError, KeyError, IndexError, TimeoutError) as e:
+                except (urllib.error.URLError, KeyError, IndexError, TimeoutError, OSError) as e:
                     errors.append(f"{model} search={use_search}: {e!r}")
                     break
     raise RuntimeError("; ".join(errors))
