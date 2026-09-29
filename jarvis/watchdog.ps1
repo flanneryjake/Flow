@@ -11,7 +11,10 @@ param([switch]$DryRun)   # -DryRun: print the Notion update instead of sending i
 
 $ErrorActionPreference = 'Continue'
 $root    = $PSScriptRoot
-$machine = (Get-Content (Join-Path $root 'machine.txt') -ErrorAction SilentlyContinue | Select-Object -First 1)
+# Plain string: in Windows PowerShell 5.1 a Get-Content line carries PSPath/PSProvider notes that ConvertTo-Json
+# serializes in full, which made the Tasks query body too large for Notion (413).
+$machine = [string](Get-Content (Join-Path $root 'machine.txt') -ErrorAction SilentlyContinue | Select-Object -First 1)
+$machine = $machine.Trim()
 if (-not $machine) { $machine = $env:COMPUTERNAME }
 # Rows in the "🩺 Machine Health" database under Jarvis Command Center.
 $healthRows = @{
