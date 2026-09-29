@@ -7,7 +7,10 @@
 # It never runs Notion cards or anything else: its only actions are starting the Remote Control task,
 # reading the Tasks board, and writing this machine's health row.
 
-param([switch]$DryRun)   # -DryRun: print the Notion update instead of sending it
+param(
+    [switch]$DryRun,    # print the Notion update instead of sending it (no push either)
+    [switch]$TestPush   # after the normal check, send one test notification to Jake's phone through the hub
+)
 
 $ErrorActionPreference = 'Continue'
 $root    = $PSScriptRoot
@@ -53,7 +56,10 @@ if ($rcProc) {
 }
 $rcDebug = Join-Path $logDir 'remote-control-debug.log'
 if (Test-Path $rcDebug) {
-    $bad = Select-String -Path $rcDebug -Pattern 'not trusted|requires a claude.ai|full-scope|not yet enabled|Enable Remote Control\?|trusted-device|could not|error' -SimpleMatch:$false |
+    # Real problems only: skip the --verbose websocket traffic (it carries "is_error" etc.) and anything older than 30 min.
+    $bad = Select-String -Path $rcDebug -Pattern 'not trusted|requires a claude.ai|full-scope|not yet enabled|Enable Remote Control\?|trusted-device|could not|\[ERROR\]|failed' |
+        Where-Object { $_.Line -notmatch '\[bridge:ws\]|Error log sink' } |
+        Where-Object { -not ($_.Line -match '^(\d{4}-\d\d-\d\dT[\d:.]+Z)') -or ((Get-Date) - [datetime]$Matches[1]).TotalMinutes -lt 30 } |
         Select-Object -Last 3
     foreach ($b in $bad) {
         $l = (Redact $b.Line).Trim()
@@ -86,6 +92,9 @@ $logRoots = @("$env:USERPROFILE\JarvisAgent\logs", 'C:\Jarvis\logs') | Where-Obj
 $newest = if ($logRoots) { Get-ChildItem -Path $logRoots -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notmatch 'remote-control|watchdog' } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
+# The Worker's own log, for "needs Jake" and usage-limit lines (the newest log can be another script's, e.g. printer-send.log).
+$agentLog = Join-Path $env:USERPROFILE 'JarvisAgent\logs\agent.log'
+$agentLines = @(Get-Content $agentLog -Tail 300 -ErrorAction SilentlyContinue)
 $tail = @()
 if ($newest) {
     $tail = @(Get-Content $newest.FullName -Tail 8 -ErrorAction SilentlyContinue)
@@ -107,6 +116,36 @@ function Parse-Stamp([string]$s, [datetime]$now) {
     return $t
 }
 function Plain($richText) { (@($richText) | ForEach-Object { $_.plain_text }) -join '' }
+
+# Usage-limit reset time from a card or log line: "usage resets 09/29 19:16", or an agent.log line
+# "2026-09-29 18:49:39 [rig] ... resets 7:10pm (America/New_York)" (dated from the line, next day if already past).
+function Parse-ResetTime([string]$l, [datetime]$now) {
+    if ($l -match 'usage resets (\d\d/\d\d \d\d:\d\d)') { return Parse-Stamp $Matches[1] $now }
+    if ($l -match '^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d).*\bresets (\d{1,2})(?::(\d\d))?\s*([ap]m)') {
+        $at = [datetime]::ParseExact("$($Matches[1]) $($Matches[2])", 'yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+        $h = [int]$Matches[3] % 12; if ($Matches[5] -eq 'pm') { $h += 12 }
+        $m = if ($Matches[4]) { [int]$Matches[4] } else { 0 }
+        $r = $at.Date.AddHours($h).AddMinutes($m)
+        if ($r -lt $at) { $r = $r.AddDays(1) }
+        return $r
+    }
+    return $null
+}
+
+# Newest "needs Jake: ..." line the Worker logged in the last 12 h, or $null.
+function Get-NeedsJake($logLines, [datetime]$now) {
+    for ($i = @($logLines).Count - 1; $i -ge 0; $i--) {
+        $l = "$(@($logLines)[$i])"
+        if ($l -match '^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) .*?needs Jake:\s*(.+)$') {
+            $at = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+            if (($now - $at).TotalHours -gt 12) { return $null }
+            $t = $Matches[2].Trim()
+            if ($t.Length -gt 160) { $t = $t.Substring(0, 160) + '...' }
+            return $t
+        }
+    }
+    return $null
+}
 
 # Working > Paused > Idle with cards waiting > Idle. $lastClaim / $pausedUntil may be $null; $waiting is $null when unknown.
 function Get-WorkerState([bool]$working, $pausedUntil, $waiting, $lastClaim, [datetime]$now, [int]$idleAfterMin) {
@@ -175,12 +214,11 @@ if ($token) {
         Log "Tasks query failed: $($_.Exception.Message)"
     }
 }
-foreach ($l in $tail) {
-    if ($l -match 'usage resets (\d\d/\d\d \d\d:\d\d)') {
-        $r = Parse-Stamp $Matches[1] $now
-        if ($r -and $r -gt $now -and (-not $pausedUntil -or $r -gt $pausedUntil)) { $pausedUntil = $r }
-    }
+foreach ($l in @($tail) + @($agentLines)) {
+    $r = Parse-ResetTime $l $now
+    if ($r -and $r -gt $now -and (-not $pausedUntil -or $r -gt $pausedUntil)) { $pausedUntil = $r }
 }
+$needsJake = Get-NeedsJake $agentLines $now
 if ($lastClaim) {
     @{ lastClaim = $lastClaim.ToString('o'); lastTitle = $lastTitle } | ConvertTo-Json | Set-Content -Path $statePath -Encoding UTF8
 }
@@ -204,6 +242,7 @@ if ($null -ne $waiting) {
 
 if ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
 if ($worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
+if ($needsJake) { $alerts.Insert(0, "Needs Jake: $needsJake") }
 $portsDown = @($portStatus | Where-Object { $_ -like '*DOWN' })
 if ($portsDown) { $alerts.Add('Down: ' + (($portsDown | ForEach-Object { ($_ -split ' :')[0] }) -join ', ')) }
 
@@ -236,3 +275,50 @@ if ($DryRun) {
     Log "No NOTION_TOKEN or unknown machine '$machine'; health row not updated."
 }
 $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding UTF8
+
+# --- 7. Phone alerts (homebase only; it reads both rows) -------------------------------
+# Pushes through the hub's /api/notify (web push to Jake's phone) when a row's alert changes to something new,
+# and when the rig has been quiet for 30+ min while it has approved cards waiting (a sleeping idle rig is normal).
+# "Remote Control restarted" alone is not pushed: the watchdog already fixed it.
+$notifyUrls = @('http://127.0.0.1:8770/api/notify', 'http://127.0.0.1:8765/api/notify')
+function Send-Push([string]$title, [string]$text) {
+    $json = @{ title = $title; body = $text; message = $text; tag = 'jarvis-health'; url = 'https://app.notion.com/p/2e1df4a5efd6402689c5e67ee1691954' } | ConvertTo-Json
+    foreach ($u in $notifyUrls) {
+        try {
+            Invoke-RestMethod -Method Post -Uri $u -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 10 | Out-Null
+            Log "Push sent via $u : $title - $text"
+            return $true
+        } catch { Log "Push via $u failed: $($_.Exception.Message)" }
+    }
+    return $false
+}
+if ($TestPush) {
+    if (Send-Push 'Jarvis test' "Test push from the $machine watchdog") { 'Push sent.' } else { "Push failed; see $log" }
+    return
+}
+if ($machine -eq 'homebase' -and $token -and -not $DryRun) {
+    $pushPath = Join-Path $root 'pushed.json'
+    $pushed = @{}
+    $prev = Get-Content $pushPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+    if ($prev) { $prev.PSObject.Properties | ForEach-Object { $pushed[$_.Name] = "$($_.Value)" } }
+    $current = @{ homebase = ($alerts -join '; ') }
+    try {
+        $rp = Invoke-RestMethod -Method Get -Uri "https://api.notion.com/v1/pages/$($healthRows['rig'])" -Headers $headers -TimeoutSec 30
+        $rigAlert = Plain $rp.properties.Alert.rich_text
+        $rigSeen  = $rp.properties.'Last check-in'.date.start
+        $rigWait  = $rp.properties.'Waiting cards'.number
+        if ($rigSeen -and ($now - [datetime]$rigSeen).TotalMinutes -gt 30 -and $rigWait -gt 0) {
+            $rigAlert = "Offline since $(([datetime]$rigSeen).ToString('MM/dd HH:mm')) with $rigWait cards waiting"
+        }
+        $current['rig'] = $rigAlert
+    } catch { Log "Reading the rig row failed: $($_.Exception.Message)" }
+    foreach ($m in @($current.Keys)) {
+        $a = "$($current[$m])"
+        $worth = ($a -split '; ' | Where-Object { $_ -and $_ -ne 'Remote Control restarted' })
+        $sig = $a -replace '\d+', '#'   # a changing count or time alone doesn't re-push
+        if ($worth -and $sig -ne $pushed[$m]) {
+            if (Send-Push "Jarvis: $m" (($worth -join '; '))) { $pushed[$m] = $sig }
+        } elseif (-not $worth) { $pushed[$m] = '' }
+    }
+    $pushed | ConvertTo-Json | Set-Content -Path $pushPath -Encoding UTF8
+}

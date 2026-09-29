@@ -27,6 +27,15 @@ The flag the table exists for: **Idle with cards waiting** means approved cards 
 running, and nothing has been claimed for 15 min. If the Worker's last log says `WAITING: usage resets ...`, the row shows
 Paused until that time instead. The rig is allowed to sleep, so a red rig row usually just means it's asleep.
 
+The Alert column also shows **Needs Jake: ...** when the Worker logged a "needs Jake:" line in the last 12 h, so
+anything waiting on you is on the row.
+
+**Phone alerts:** the homebase watchdog pushes to your phone through the hub's `/api/notify` (web push) when either
+row's alert changes to something new, and when the rig has been quiet for 30+ min while it has approved cards waiting.
+A lone "Remote Control restarted" isn't pushed, since the watchdog already fixed it. If homebase itself goes down,
+nothing can push; its row still turns red in Notion. Check the push path with
+`powershell -File C:\Jarvis\watchdog\watchdog.ps1 -TestPush`.
+
 Test without writing to Notion: `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -DryRun`
 
 Install once per machine, in a normal PowerShell window at that machine:
