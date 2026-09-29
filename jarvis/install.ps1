@@ -8,7 +8,7 @@
 #     two one-time questions (trust the folder, enable Remote Control) -- these can't be pre-answered
 #   - scheduled task "Jarvis Remote Control": starts the Remote Control server hidden at every logon
 #   - scheduled task "Jarvis Watchdog": every 5 min restarts Remote Control if it died (it exits after
-#     ~10 min offline) and posts a health snapshot to the machine's Heartbeat card in Notion
+#     ~10 min offline) and updates this machine's row in the Notion Machine Health table
 #   - homebase only: never sleep on AC power, lid close does nothing on AC
 
 $ErrorActionPreference = 'Stop'
@@ -48,7 +48,7 @@ foreach ($v in 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_T
 Invoke-WebRequest -UseBasicParsing "$base/watchdog.ps1" -OutFile (Join-Path $wdDir 'watchdog.ps1')
 $results['Watchdog script'] = "$wdDir\watchdog.ps1"
 
-# --- Notion token (for the heartbeat) ------------------------------------------------
+# --- Notion token (for the health row) -- ------------------------------------------------
 $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'User')
 if (-not $token) { $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'Machine') }
 if (-not $token) {
@@ -69,7 +69,7 @@ if ($token -match '^(ntn_|secret_)') {
     [Environment]::SetEnvironmentVariable('NOTION_TOKEN', $token, 'User')
     $results['Notion token'] = 'set (user env NOTION_TOKEN)'
 } else {
-    $results['Notion token'] = 'MISSING - heartbeat will not post'
+    $results['Notion token'] = 'MISSING - health row will not update'
 }
 
 # --- Power (homebase stays awake; the rig is allowed to sleep, homebase wakes it) -----
@@ -135,7 +135,7 @@ Say ''
 Say '== Done ==' 'Green'
 $results.GetEnumerator() | ForEach-Object { Say ("  {0}: {1}" -f $_.Key, $_.Value) 'Green' }
 Say ''
-Say 'Health snapshot (also posted to the Heartbeat card in Notion):'
+Say 'Health snapshot (also written to the Machine Health table in Notion):'
 Write-Host $snap
 Say ''
 Say "Check: in the Claude app's Code tab you should now see a session named '$machine'." 'Yellow'
