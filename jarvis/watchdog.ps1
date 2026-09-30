@@ -110,7 +110,31 @@ function Restart-RemoteControl($task) {
     return @{ ok = $false; notes = $notes }
 }
 
+# Remote Control started by hand (typed into a terminal, possibly in another folder) registers as a second device
+# ("DESKTOP-5VE3C77" with no folder) instead of the approved one the task registers ("DESKTOP-5VE3C77 (Jarvis)"),
+# and new sessions pinned to the approved device get refused. A copy counts as the task's when one of its parents is
+# a launcher whose command line carries `remote-control` (the task's wrapper, or this watchdog's direct start).
+function Test-UnderLauncher($p, $all) {
+    $cur = $p
+    for ($i = 0; $i -lt 4 -and $cur; $i++) {
+        $parent = $all | Where-Object { $_.ProcessId -eq $cur.ParentProcessId } | Select-Object -First 1
+        if (-not $parent) { return $false }
+        if ($wrappers -contains $parent.Name.ToLower() -and $parent.CommandLine -match '\bremote-control\b') { return $true }
+        $cur = $parent
+    }
+    return $false
+}
+$rcOutside = $false
 $rcProc = Get-RcProcess
+if ($rcProc -and -not $kick) {
+    $all = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+    $ours = @($rcProc | Where-Object { Test-UnderLauncher $_ $all })
+    if (-not $ours) {
+        # Report only: when the task's own start is broken, the hand-started copy is the only one working.
+        $rcOutside = $true
+        $lines.Add("Remote Control: running by hand outside its task (pid $(@($rcProc.ProcessId) -join ', ')); it shows up as a second device, so tick Restart Remote Control once the task works")
+    }
+}
 if ($rcProc -and $kick) {
     $rcProc | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Log "Restart requested from the Machine Health row; stopped Remote Control pid $(@($rcProc.ProcessId) -join ', ')."
@@ -141,7 +165,14 @@ if ($rcProc) {
     }
 }
 $rcDebug = Join-Path $logDir 'remote-control-debug.log'
-if (Test-Path $rcDebug) {
+if ($rcState -eq 'Down' -and (Test-Path $rcDebug)) {
+    # Whatever Remote Control last wrote before it quit, so the reason is on the row without opening the PC.
+    $lw = (Get-Item $rcDebug).LastWriteTime
+    $lines.Add("  RC debug log last written $($lw.ToString('MM/dd HH:mm')), tail:")
+    Get-Content $rcDebug -Tail 4 -ErrorAction SilentlyContinue | ForEach-Object {
+        $l = (Redact $_).Trim(); $lines.Add('    ' + $l.Substring(0, [Math]::Min(200, $l.Length)))
+    }
+} elseif (Test-Path $rcDebug) {
     # Real problems only: skip the --verbose websocket traffic (it carries "is_error" etc.) and anything older than 30 min.
     $bad = Select-String -Path $rcDebug -Pattern 'not trusted|requires a claude.ai|full-scope|not yet enabled|Enable Remote Control\?|trusted-device|could not|\[ERROR\]|failed' |
         Where-Object { $_.Line -notmatch '\[bridge:ws\]|Error log sink' } |
@@ -317,6 +348,7 @@ if ($null -ne $waiting) {
     $lines.Insert(2, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
 }
 
+if ($rcOutside) { $alerts.Add('Remote Control running by hand outside its task (second device)') }
 if ($rcState -eq 'Down') { $alerts.Insert(0, "Remote Control down, restart failed: run 'claude remote-control' in C:\Jarvis") }
 elseif ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
 if ($worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
