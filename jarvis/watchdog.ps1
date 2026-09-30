@@ -31,7 +31,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir 'watchdog.log'
 if ((Test-Path $log) -and (Get-Item $log).Length -gt 1MB) { Move-Item $log "$log.old" -Force }
 function Log([string]$m) { "$(Get-Date -Format 'MM/dd HH:mm:ss') $m" | Add-Content -Path $log }
-function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-)[A-Za-z0-9_\-]{16,}', '<redacted>' }
+function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-|ghp_|github_pat_)[A-Za-z0-9_\-]{16,}', '<redacted>' }
 
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("$(Get-Date -Format 'MM/dd HH:mm') $machine watchdog")
@@ -275,6 +275,29 @@ if ($DryRun) {
     Log "No NOTION_TOKEN or unknown machine '$machine'; health row not updated."
 }
 $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding UTF8
+
+# Same row on GitHub (the pinned "Health: <machine>" issue in the tasks repo), while Notion is phased out.
+# Runs only once install-ghq.ps1 has set GITHUB_TASKS_TOKEN.
+$ghq = 'C:\Jarvis\ghq\ghq.py'
+$ghToken = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
+$py = Get-Command python, py -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($ghToken -and (Test-Path $ghq) -and $py -and -not $DryRun) {
+    $healthJson = Join-Path $logDir 'health.json'
+    @{
+        fields   = [ordered]@{
+            'Remote Control'    = $rcState
+            'Worker'            = $worker
+            'Waiting cards'     = $(if ($null -ne $waiting) { $waiting } else { 'unknown' })
+            'Last claim'        = $claimText
+            'Last claimed card' = $lastTitle
+        }
+        alerts   = @($alerts)
+        snapshot = $snapshot
+    } | ConvertTo-Json -Depth 5 | Set-Content -Path $healthJson -Encoding UTF8
+    $env:GITHUB_TASKS_TOKEN = $ghToken
+    $out = & $py.Source $ghq health --machine $machine --json $healthJson 2>&1
+    if ($LASTEXITCODE -ne 0) { Log "GitHub health update failed: $(Redact "$out")" }
+}
 
 # --- 7. Phone alerts (homebase only; it reads both rows) -------------------------------
 # Pushes through the hub's /api/notify (web push to Jake's phone) when a row's alert changes to something new,
