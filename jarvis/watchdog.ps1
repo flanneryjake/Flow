@@ -280,7 +280,9 @@ function Parse-ResetTime([string]$l, [datetime]$now) {
         $h = [int]$Matches[3] % 12; if ($Matches[5] -eq 'pm') { $h += 12 }
         $m = if ($Matches[4]) { [int]$Matches[4] } else { 0 }
         $r = $at.Date.AddHours($h).AddMinutes($m)
-        if ($r -lt $at) { $r = $r.AddDays(1) }
+        # A reset a few minutes before the log line is today's (the Worker logs with a pad); roll to tomorrow only
+        # when it is well in the past.
+        if ($r -lt $at.AddHours(-2)) { $r = $r.AddDays(1) }
         return $r
     }
     return $null
