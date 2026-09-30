@@ -1,0 +1,164 @@
+# Jarvis control panel: a YAML dashboard for Home Assistant. Phone (Companion app) gets the Home view as a
+# summary; a desktop browser shows every view. Register it in configuration.yaml:
+#   lovelace:
+#     dashboards:
+#       jarvis-panel:
+#         mode: yaml
+#         title: Jarvis
+#         icon: mdi:robot
+#         show_in_sidebar: true
+#         filename: dashboards/jarvis.yaml
+# Machine entities come from HASS.Agent (Windows) and jarvis_agent.py (Linux / Pi) with the names set in
+# README.md; rename here if a machine uses a different device name.
+title: Jarvis
+views:
+  - title: Home
+    path: home
+    icon: mdi:home
+    cards:
+      - type: glance
+        title: At a glance
+        columns: 4
+        entities:
+          - entity: sensor.jarvis_approvals_waiting
+            name: Approvals
+            tap_action: { action: navigate, navigation_path: /jarvis-panel/approvals }
+          - entity: binary_sensor.jarvis_pi_online
+            name: Pi
+          - entity: sensor.homebase_worker
+            name: Homebase
+            tap_action: { action: navigate, navigation_path: /jarvis-panel/machines }
+          - entity: sensor.rig_worker
+            name: Rig
+            tap_action: { action: navigate, navigation_path: /jarvis-panel/machines }
+      - type: entity
+        entity: sensor.jarvis_last_voice_command
+        name: Last voice command
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: sensor.homebase_alert
+            state_not: OK
+        card: { type: entity, entity: sensor.homebase_alert, name: Homebase alert }
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: sensor.rig_alert
+            state_not: OK
+        card: { type: entity, entity: sensor.rig_alert, name: Rig alert }
+      - type: horizontal-stack
+        cards:
+          - type: button
+            name: Wake rig
+            icon: mdi:power
+            tap_action:
+              action: perform-action
+              perform_action: script.jarvis_wake_rig
+              confirmation: { text: "Wake the rig?" }
+      # Favorite smart-home toggles go here once plugs/lights are added (Smart home phase 1 card).
+
+  - title: Machines
+    path: machines
+    icon: mdi:desktop-tower-monitor
+    cards:
+      - type: entities
+        title: Homebase
+        entities:
+          - sensor.homebase_worker
+          - sensor.homebase_last_check_in
+          - sensor.homebase_cpuload
+          - sensor.homebase_memoryusage
+          - sensor.homebase_lastactive
+          - type: divider
+          - entity: button.homebase_restart
+            name: Restart
+          - entity: button.homebase_lock
+            name: Lock
+      - type: entities
+        title: Rig
+        entities:
+          - sensor.rig_worker
+          - sensor.rig_last_check_in
+          - sensor.rig_cpuload
+          - sensor.rig_memoryusage
+          - sensor.rig_gpuload
+          - sensor.rig_gputemperature
+          - sensor.rig_lastactive
+          - type: divider
+          - entity: script.jarvis_wake_rig
+            name: Wake
+          - entity: button.rig_sleep
+            name: Sleep
+          - entity: button.rig_restart
+            name: Restart
+          - entity: button.rig_shutdown
+            name: Shut down
+      - type: entities
+        title: RTX 5060 laptop
+        entities:
+          - sensor.laptop5060_cpuload
+          - sensor.laptop5060_memoryusage
+          - sensor.laptop5060_lastactive
+          - type: divider
+          - entity: button.laptop5060_sleep
+            name: Sleep
+          - entity: button.laptop5060_restart
+            name: Restart
+      - type: entities
+        title: Jarvis Pi
+        entities:
+          - binary_sensor.jarvis_pi_online
+          - sensor.jarvis_pi_cpu
+          - sensor.jarvis_pi_memory
+          - sensor.jarvis_pi_temperature
+          - sensor.jarvis_pi_uptime
+          - type: divider
+          - entity: button.jarvis_pi_restart_voice
+            name: Restart voice service
+          - entity: button.jarvis_pi_reboot
+            name: Reboot
+
+  - title: Approvals
+    path: approvals
+    icon: mdi:inbox-arrow-down
+    panel: true
+    cards:
+      # Hub v3 already does approve/snooze with the PIN rules, so the panel embeds it instead of copying them.
+      - type: iframe
+        url: http://100.90.201.22:8770/
+        aspect_ratio: 150%
+
+  - title: Voice
+    path: voice
+    icon: mdi:microphone
+    cards:
+      - type: entities
+        entities:
+          - binary_sensor.jarvis_pi_online
+          - sensor.jarvis_last_voice_command
+      - type: markdown
+        title: Last exchange
+        content: >-
+          **Heard:** {{ state_attr('sensor.jarvis_last_voice_command', 'text') or '—' }}
+
+          **Replied:** {{ state_attr('sensor.jarvis_last_voice_command', 'reply') or '—' }}
+
+          *{{ state_attr('sensor.jarvis_last_voice_command', 'at') or '' }}*
+      - type: logbook
+        entities: [sensor.jarvis_last_voice_command]
+        hours_to_show: 24
+
+  - title: Logs
+    path: logs
+    icon: mdi:text-box-search
+    cards:
+      - type: markdown
+        title: Homebase snapshot
+        content: >-
+          {{ (state_attr('sensor.homebase_worker', 'Snapshot').rich_text | map(attribute='plain_text') | join)
+             if state_attr('sensor.homebase_worker', 'Snapshot') else 'No snapshot yet' }}
+      - type: markdown
+        title: Rig snapshot
+        content: >-
+          {{ (state_attr('sensor.rig_worker', 'Snapshot').rich_text | map(attribute='plain_text') | join)
+             if state_attr('sensor.rig_worker', 'Snapshot') else 'No snapshot yet' }}

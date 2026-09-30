@@ -73,7 +73,32 @@ $portStatus = foreach ($k in $ports.Keys) {
     $up = Get-NetTCPConnection -State Listen -LocalPort $ports[$k] -ErrorAction SilentlyContinue
     "$k :$($ports[$k]) " + $(if ($up) { 'up' } else { 'DOWN' })
 }
+# Home Assistant and Mosquitto run in Docker inside WSL2, so Windows may not list their sockets (WSL mirrored
+# networking); a real TCP connect to localhost is the reliable test.
+function Test-Port([int]$port) {
+    $c = New-Object System.Net.Sockets.TcpClient
+    try { return ($c.ConnectAsync('127.0.0.1', $port).Wait(2000) -and $c.Connected) } catch { return $false } finally { $c.Close() }
+}
+if ($machine -eq 'homebase') {
+    $portStatus = @($portStatus) + @(foreach ($p in @(@('home assistant', 8123), @('mqtt', 1883))) {
+        "$($p[0]) :$($p[1]) " + $(if (Test-Port $p[1]) { 'up' } else { 'DOWN' })
+    })
+}
 $lines.Add('Ports: ' + ($portStatus -join ', '))
+if ($machine -eq 'homebase') {
+    # When Home Assistant is down, show why: the tail of the HA stack installer/keeper log.
+    if ($portStatus -match 'home assistant :8123 DOWN') {
+        $haLog = Get-ChildItem -Path 'C:\Jarvis' -Recurse -Depth 3 -File -Include '*ha*stack*.log', '*install-ha*.log', '*homeassistant*.log' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($haLog) {
+            $lines.Add("HA log: $($haLog.FullName) ($($haLog.LastWriteTime.ToString('MM/dd HH:mm')))")
+            Get-Content $haLog.FullName -Tail 4 -ErrorAction SilentlyContinue | ForEach-Object {
+                $l = (Redact $_).Trim()
+                if ($l) { $lines.Add('  ' + $l.Substring(0, [Math]::Min(180, $l.Length))) }
+            }
+        } else { $lines.Add('HA log: none found under C:\Jarvis') }
+    }
+}
 
 # --- 3. Jarvis scheduled tasks (report only; the Worker's own schedule decides when it runs) ---
 $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |

@@ -21,7 +21,7 @@ Everything here has the home PC connect *out* instead:
 | Waiting cards | Approved + Auto-executable cards for this machine or Any with nothing in `Claimed by` |
 | Last claim / Last claimed card | Newest `Claimed by` stamp this machine wrote on the Tasks board |
 | Alert | Why the row isn't green |
-| Snapshot | Full text: Remote Control, ports, Jarvis scheduled tasks, tail of the newest Worker log |
+| Snapshot | Full text: Remote Control, ports (on homebase also Home Assistant :8123 and MQTT :1883, with the HA log tail when HA is down), Jarvis scheduled tasks, tail of the newest Worker log |
 
 The flag the table exists for: **Idle with cards waiting** means approved cards are sitting unclaimed, the Worker isn't
 running, and nothing has been claimed for 15 min. If the Worker's last log says `WAITING: usage resets ...`, the row shows
@@ -46,3 +46,5 @@ irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcx
 
 The one-time questions (trust the folder, enable Remote Control) have to be answered at the keyboard.
 Claude Code has no way to pre-answer them, and without a terminal the server refuses to start.
+
+Home Assistant config (control panel, MQTT, agents for each machine) is in [homeassistant/](homeassistant/README.md).

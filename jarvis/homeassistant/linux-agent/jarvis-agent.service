@@ -1,0 +1,24 @@
+# Install on the Pi (or any Linux box):
+#   sudo cp jarvis_agent.py /opt/jarvis/ && sudo cp jarvis-agent.service /etc/systemd/system/
+#   sudo apt install python3-paho-mqtt     # needs paho-mqtt 2.x; else: pip install "paho-mqtt>=2"
+#   sudo systemctl edit jarvis-agent       # put MQTT_PASS (and any overrides) in the drop-in, not here
+#   sudo systemctl enable --now jarvis-agent
+# The buttons need passwordless sudo for exactly these two commands (visudo -f /etc/sudoers.d/jarvis-agent):
+#   jarvis ALL=(root) NOPASSWD: /usr/bin/systemctl reboot, /usr/bin/systemctl restart jarvis-voice.service
+[Unit]
+Description=Jarvis agent (reports this machine to Home Assistant over MQTT)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=jarvis
+Environment=MQTT_HOST=100.90.201.22
+Environment=MQTT_USER=jarvis
+Environment=JARVIS_NODE=jarvis_pi
+Environment=JARVIS_BASE_TOPIC=jarvis/pi
+ExecStart=/usr/bin/python3 /opt/jarvis/jarvis_agent.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
