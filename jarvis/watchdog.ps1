@@ -37,18 +37,71 @@ $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("$(Get-Date -Format 'MM/dd HH:mm') $machine watchdog")
 
 # --- 1. Remote Control ---------------------------------------------------------------
-$rcProc = Get-CimInstance Win32_Process -Filter "Name='claude.exe' OR Name='node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'remote-control' }
+# Any process running `claude remote-control`, whatever the exe is called, except the powershell/cmd wrapper
+# the scheduled task starts it in (its command line carries "remote-control" too).
+$wrappers = 'powershell.exe', 'pwsh.exe', 'cmd.exe', 'conhost.exe'
+function Get-RcProcess {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '\bremote-control\b' -and $wrappers -notcontains $_.Name.ToLower() -and $_.ProcessId -ne $PID }
+}
+# Restart order, each step only if the one before didn't bring Remote Control back:
+#  1. Start the task. If Task Scheduler still thinks the last run is going (its wrapper outlived claude), a plain
+#     start is refused with 0x800710E0 ("do not start a new instance"), so stop the stale run and leftover wrappers first.
+#  2. Start the task's own command directly from this watchdog run (same user, hidden window), in case Task Scheduler
+#     keeps refusing (logon type, batch right, corrupted state).
+function Restart-RemoteControl($task) {
+    $info = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+    $notes = New-Object System.Collections.Generic.List[string]
+    if ($task.State -eq 'Running') {
+        Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+        $notes.Add('stopped a stale task run')
+    }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '\bremote-control\b' -and $wrappers -contains $_.Name.ToLower() -and $_.ProcessId -ne $PID -and $_.CommandLine -notmatch 'watchdog' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $notes.Add("killed leftover wrapper pid $($_.ProcessId)") }
+    Start-Sleep -Seconds 2
+    try {
+        Start-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop
+        $notes.Add('started the task')
+    } catch {
+        $notes.Add("task start refused: $($_.Exception.Message.Trim()) (last result 0x$('{0:X8}' -f [int]$info.LastTaskResult))")
+    }
+    for ($i = 0; $i -lt 6 -and -not (Get-RcProcess); $i++) { Start-Sleep -Seconds 5 }
+    if (Get-RcProcess) { return @{ ok = $true; how = 'task'; notes = $notes } }
+
+    $a = @($task.Actions)[0]
+    if ($a -and $a.Execute) {
+        try {
+            $sp = @{ FilePath = $a.Execute; WindowStyle = 'Hidden'; ErrorAction = 'Stop' }
+            if ($a.Arguments)        { $sp.ArgumentList = $a.Arguments }
+            if ($a.WorkingDirectory) { $sp.WorkingDirectory = $a.WorkingDirectory }
+            Start-Process @sp
+            $notes.Add('started the task command directly')
+        } catch { $notes.Add("direct start failed: $($_.Exception.Message.Trim())") }
+        for ($i = 0; $i -lt 6 -and -not (Get-RcProcess); $i++) { Start-Sleep -Seconds 5 }
+        if (Get-RcProcess) { return @{ ok = $true; how = 'direct'; notes = $notes } }
+    }
+    return @{ ok = $false; notes = $notes }
+}
+
+$rcProc = Get-RcProcess
 if ($rcProc) {
     $rcState = 'Up'
     $lines.Add("Remote Control: UP (pid $(@($rcProc)[0].ProcessId))")
 } else {
     $task = Get-ScheduledTask -TaskName 'Jarvis Remote Control' -ErrorAction SilentlyContinue
     if ($task) {
-        Start-ScheduledTask -TaskName 'Jarvis Remote Control'
-        Log 'Remote Control was down; started the task.'
-        $rcState = 'Restarted'
-        $lines.Add('Remote Control: WAS DOWN, restarted just now')
+        $r = Restart-RemoteControl $task
+        $how = $r.notes -join '; '
+        if ($r.ok) {
+            $rcState = 'Restarted'
+            Log "Remote Control was down; back up ($how)."
+            $lines.Add("Remote Control: WAS DOWN, restarted just now ($how)")
+        } else {
+            $rcState = 'Restart failed'
+            Log "Remote Control was down and did NOT come back: $how"
+            $lines.Add("Remote Control: DOWN, restart failed ($how). Run 'claude remote-control' in C:\Jarvis by hand.")
+        }
     } else {
         $rcState = 'Task missing'
         $lines.Add('Remote Control: task missing (re-run install.ps1)')
@@ -240,7 +293,8 @@ if ($null -ne $waiting) {
     $lines.Insert(2, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
 }
 
-if ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
+if ($rcState -eq 'Restart failed') { $alerts.Insert(0, "Remote Control down, restart failed: run 'claude remote-control' in C:\Jarvis") }
+elseif ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
 if ($worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
 if ($needsJake) { $alerts.Insert(0, "Needs Jake: $needsJake") }
 $portsDown = @($portStatus | Where-Object { $_ -like '*DOWN' })
