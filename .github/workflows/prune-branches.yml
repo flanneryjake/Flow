@@ -1,0 +1,49 @@
+# Deletes branches whose pull request is closed (merged or not), so nobody
+# has to trim branches by hand. A branch is kept if an open PR still uses it,
+# if new commits were pushed after its PR closed, or if it is protected below.
+name: Prune finished branches
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const keep = new Set(['main', 'claude/eager-knuth-lakcxt']);
+            const { owner, repo } = context.repo;
+            const prs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'all', per_page: 100 });
+            const inUse = new Set();
+            for (const pr of prs) {
+              if (pr.state === 'open') {
+                inUse.add(pr.head.ref);
+                inUse.add(pr.base.ref);
+              }
+            }
+            const branches = await github.paginate(github.rest.repos.listBranches, { owner, repo, per_page: 100 });
+            const tips = new Map(branches.map(b => [b.name, b.commit.sha]));
+            const deleted = [];
+            for (const pr of prs) {
+              const ref = pr.head.ref;
+              if (pr.state !== 'closed' || pr.head.repo?.full_name !== `${owner}/${repo}`) continue;
+              if (keep.has(ref) || inUse.has(ref) || !tips.has(ref)) continue;
+              if (tips.get(ref) !== pr.head.sha) {
+                core.info(`Keeping ${ref}: it has commits pushed after PR #${pr.number} closed`);
+                continue;
+              }
+              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${ref}` });
+              tips.delete(ref);
+              deleted.push(`${ref} (PR #${pr.number})`);
+            }
+            core.info(deleted.length ? `Deleted: ${deleted.join(', ')}` : 'Nothing to delete');
