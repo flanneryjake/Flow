@@ -30,21 +30,19 @@ of waiting for the next poll.
 Two failed or timed-out runs in a row move a card to `status:needs-jake` on their own, so a card that keeps
 hitting the 45-minute timeout stops burning usage.
 
-## Setup (Jake, once)
+## Setup
 
-1. Create the private repo: https://github.com/new, named `jarvis-tasks`, set to **Private**, with a README.
-2. Make a token: https://github.com/settings/personal-access-tokens/new. Choose **Only select repositories**
-   and pick `jarvis-tasks`, then under Repository permissions set **Issues: Read and write**. Set an expiry
-   you're happy with (one year is the longest).
-3. On homebase, paste this into PowerShell and paste the token when it asks:
-   `irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/ghq/install-ghq.ps1 | iex`
-   It creates the labels, copies the open Notion cards (after showing you the list), and stores the token.
-4. Run the same line on the rig (it skips the Notion copy).
-5. Optional, so cloud Claude threads can read the board: add `jarvis-tasks` to the Claude GitHub app at
-   https://github.com/apps/claude/installations/select_target.
+Done from the cloud on 2026-09-30: the repo `flanneryjake/jarvis-tasks` exists, the labels and the two
+health issues are in place, and the 200 open Notion cards are copied (their page content stays in Notion,
+linked from each issue).
 
-Then re-save `watchdog.ps1` from this branch on both PCs, as with earlier watchdog updates. From then on the
-health issues update every 5 minutes, alongside Notion.
+What each PC still needs before its Worker or watchdog can use GitHub (no scripts needed):
+1. A fine-grained token for `jarvis-tasks` only, with **Issues: Read and write**
+   (https://github.com/settings/personal-access-tokens/new).
+2. Start menu → "Edit environment variables for your account" → New: name `GITHUB_TASKS_TOKEN`, value
+   the token. Then sign out and back in, or restart the Worker.
+3. `ghq.py` saved to `C:\Jarvis\ghq\ghq.py` (a Remote Control session can do this; `install-ghq.ps1`
+   does steps 2 and 3 too, where PowerShell scripts are allowed).
 
 ## Worker contract (for agent.py)
 

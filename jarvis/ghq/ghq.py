@@ -118,15 +118,17 @@ def api(method, path, body=None):
 
 def paged(path):
     """GET every page of a list endpoint."""
+    # Numbered pages rather than the Link header: GitHub's "next" links use /repositories/<id>/ paths,
+    # which some proxies refuse.
+    path = re.sub(r'([?&])per_page=\d+&?', r'\1', path).rstrip('?&')
     sep = '&' if '?' in path else '?'
-    url = f'{API}{path}{sep}per_page=100'
-    out = []
-    while url:
-        _, data, headers = request('GET', url)
-        out.extend(data or [])
-        m = re.search(r'<([^>]+)>;\s*rel="next"', headers.get('Link', '') or headers.get('link', ''))
-        url = m.group(1) if m else None
-    return out
+    out, page = [], 1
+    while True:
+        data = request('GET', f'{path}{sep}per_page=100&page={page}')[1] or []
+        out.extend(data)
+        if len(data) < 100:
+            return out
+        page += 1
 
 
 def repo_path(suffix=''):
