@@ -48,3 +48,19 @@ The one-time questions (trust the folder, enable Remote Control) have to be answ
 Claude Code has no way to pre-answer them, and without a terminal the server refuses to start.
 
 Home Assistant config (control panel, MQTT, agents for each machine) is in [homeassistant/](homeassistant/README.md).
+
+## Gemini helper (free research and proofreading)
+
+`helper/gemini_helper.py` hands research and proofreading to Gemini's free tier so Claude usage goes to real work.
+Standard-library Python, no installs.
+
+```powershell
+setx GEMINI_API_KEY "<your AI Studio key>"   # once, then open a new terminal
+python helper\gemini_helper.py proofread C:\Jarvis\outputs\draft.md -o C:\Jarvis\outputs\draft.review.md
+python helper\gemini_helper.py research "free OCR libraries for Python"
+```
+
+- Proofread output lists problems with quoted fixes and ends READY or NEEDS FIXES; Claude applies the fixes.
+- Research tries Google Search grounding first. The free key had no search quota on 2026-09-29, so it falls back
+  to the model's own knowledge and marks unsure items as unverified; check links before relying on them.
+- The free tier may use what you send for training, so don't send private documents.
