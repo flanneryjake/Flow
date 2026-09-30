@@ -75,3 +75,11 @@ python helper\gemini_helper.py research "free OCR libraries for Python"
 - Research tries Google Search grounding first. The free key had no search quota on 2026-09-29, so it falls back
   to the model's own knowledge and marks unsure items as unverified; check links before relying on them.
 - The free tier may use what you send for training, so don't send private documents.
+
+## No flashing windows
+
+A scheduled task that starts `powershell.exe`, `cmd.exe` or `python.exe` flashes a console for a split second on
+every run, even with `-WindowStyle Hidden`. `hide-task-windows.ps1` rewrites every `Jarvis*` task like that to start
+through `wscript.exe` and a small `.vbs` in `C:\Jarvis\hidden\` that runs the same command with no window and waits
+for it. Remote Control is left alone. Originals are saved in `C:\Jarvis\hidden\original-actions.json`; to undo, set
+`$env:JARVIS_UNHIDE='1'` and run it again. Re-run it after re-running the installer or adding a Jarvis task.
