@@ -41,6 +41,10 @@ stale run of the *Jarvis Remote Control* task and kills leftover wrapper windows
 a new start with 0x800710E0), starts the task, and if Remote Control still isn't up 30 s later, starts the task's own
 command directly. What it did is in `logs\watchdog.log` and the row's Snapshot.
 
+**Remote restart:** tick **Restart Remote Control** on a machine's Machine Health row (from your phone, or a cloud
+Claude session does it through Notion) and that machine's next watchdog run, within 5 minutes, restarts Remote Control
+even if its process still looks alive, then unticks the box. Use it when the Claude app shows the PC offline.
+
 Test without writing to Notion: `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -DryRun`
 
 Install once per machine, in a normal PowerShell window at that machine:

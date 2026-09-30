@@ -36,6 +36,32 @@ function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-)[A-Za-z0-9_
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("$(Get-Date -Format 'MM/dd HH:mm') $machine watchdog")
 
+$token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'User')
+if (-not $token) { $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'Machine') }
+if (-not $token) { $token = $env:NOTION_TOKEN }
+$headers = @{ Authorization = "Bearer $token"; 'Notion-Version' = '2022-06-28' }
+function Invoke-Notion([string]$method, [string]$path, $body) {
+    $json = $body | ConvertTo-Json -Depth 12
+    Invoke-RestMethod -Method $method -Uri "https://api.notion.com/v1/$path" -Headers $headers -TimeoutSec 30 `
+        -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
+}
+
+# Remote kick: ticking "Restart Remote Control" on this machine's Machine Health row (by Jake, or by a cloud Claude
+# session through Notion) makes this run restart Remote Control even if its process looks alive, e.g. when it is
+# running but no longer connected. Section 6 unticks it again.
+$kickProp = 'Restart Remote Control'
+$kickHas  = $false
+$kick     = $false
+if ($token -and $healthRows[$machine]) {
+    try {
+        $me = Invoke-RestMethod -Method Get -Uri "https://api.notion.com/v1/pages/$($healthRows[$machine])" -Headers $headers -TimeoutSec 30
+        if ($me.properties.PSObject.Properties.Name -contains $kickProp) {
+            $kickHas = $true
+            $kick = [bool]$me.properties.$kickProp.checkbox -and -not $DryRun
+        }
+    } catch { Log "Reading the health row for a restart request failed: $($_.Exception.Message)" }
+}
+
 # --- 1. Remote Control ---------------------------------------------------------------
 # Any process running `claude remote-control`, whatever the exe is called, except the powershell/cmd wrapper
 # the scheduled task starts it in (its command line carries "remote-control" too).
@@ -85,6 +111,13 @@ function Restart-RemoteControl($task) {
 }
 
 $rcProc = Get-RcProcess
+if ($rcProc -and $kick) {
+    $rcProc | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Log "Restart requested from the Machine Health row; stopped Remote Control pid $(@($rcProc.ProcessId) -join ', ')."
+    $lines.Add('Remote Control: restart requested from Notion, stopped the running copy')
+    Start-Sleep -Seconds 2
+    $rcProc = $null
+}
 if ($rcProc) {
     $rcState = 'Up'
     $lines.Add("Remote Control: UP (pid $(@($rcProc)[0].ProcessId))")
@@ -209,15 +242,6 @@ function Get-WorkerState([bool]$working, $pausedUntil, $waiting, $lastClaim, [da
     return 'Idle'
 }
 
-$token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'User')
-if (-not $token) { $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'Machine') }
-if (-not $token) { $token = $env:NOTION_TOKEN }
-$headers = @{ Authorization = "Bearer $token"; 'Notion-Version' = '2022-06-28' }
-function Invoke-Notion([string]$method, [string]$path, $body) {
-    $json = $body | ConvertTo-Json -Depth 12
-    Invoke-RestMethod -Method $method -Uri "https://api.notion.com/v1/$path" -Headers $headers -TimeoutSec 30 `
-        -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
-}
 
 $now         = Get-Date
 $alerts      = New-Object System.Collections.Generic.List[string]
@@ -319,6 +343,7 @@ $props = [ordered]@{
     'Alert'             = @{ rich_text = (RT ($alerts -join '; ')) }
     'Snapshot'          = @{ rich_text = (RT $snapshot) }
 }
+if ($kickHas) { $props[$kickProp] = @{ checkbox = $false } }
 $row = $healthRows[$machine]
 if ($DryRun) {
     @{ row = $row; properties = $props } | ConvertTo-Json -Depth 12
