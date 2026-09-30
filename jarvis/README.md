@@ -16,7 +16,7 @@ Everything here has the home PC connect *out* instead:
 | Column | Meaning |
 | --- | --- |
 | Health | 🟢 OK, 🟠 plus the alert, or 🔴 Offline once the last check-in is over 15 min old (a Notion formula, so it works even when the PC is off) |
-| Remote Control | Up, Restarted (was down, watchdog started it), Task missing |
+| Remote Control | Up, Restarted (was down, watchdog brought it back), **Down** (still down after every restart step; the alert says "restart failed" and is pushed to the phone), Task missing |
 | Worker | Working, Idle, **Idle with cards waiting**, Paused (usage limit), Unknown |
 | Waiting cards | Approved + Auto-executable cards for this machine or Any with nothing in `Claimed by` |
 | Last claim / Last claimed card | Newest `Claimed by` stamp this machine wrote on the Tasks board |
@@ -35,6 +35,15 @@ row's alert changes to something new, and when the rig has been quiet for 30+ mi
 A lone "Remote Control restarted" isn't pushed, since the watchdog already fixed it. If homebase itself goes down,
 nothing can push; its row still turns red in Notion. Check the push path with
 `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -TestPush`.
+
+**How the Remote Control restart works:** if no `claude remote-control` process is running, the watchdog stops any
+stale run of the *Jarvis Remote Control* task and kills leftover wrapper windows (a stale run makes Task Scheduler refuse
+a new start with 0x800710E0), starts the task, and if Remote Control still isn't up 30 s later, starts the task's own
+command directly. What it did is in `logs\watchdog.log` and the row's Snapshot.
+
+**Remote restart:** tick **Restart Remote Control** on a machine's Machine Health row (from your phone, or a cloud
+Claude session does it through Notion) and that machine's next watchdog run, within 5 minutes, restarts Remote Control
+even if its process still looks alive, then unticks the box. Use it when the Claude app shows the PC offline.
 
 Test without writing to Notion: `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -DryRun`
 
