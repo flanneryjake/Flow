@@ -14,6 +14,11 @@ Standard library only (Python 3.8+). Config comes from environment variables:
   JARVIS_TASKS_REPO   owner/name, default flanneryjake/jarvis-tasks
   JARVIS_WAKE_URLS    optional, comma-separated, e.g. http://homebase:8790/wake,http://rig:8790/wake
 
+Jake's "do it now" lane: `python ghq.py now "task" --machine homebase` (typed on the rig, or run by Claude Code
+there) files an approved card labelled `now` and wakes the Workers. The Worker pauses whatever card it is
+running (outcome `paused`, labelled `resume` so it runs next), runs the `now` card, and keeps one progress
+comment on it up to date every 30 s. `--watch` prints that progress where Jake typed the task.
+
 Use as a library (import ghq) or from the command line: python ghq.py --help
 """
 import argparse
@@ -54,6 +59,8 @@ LABELS = {
     'type:idea':         ('fef2c0', 'Idea'),
     'type:approval':     ('d93f0b', 'Approval request'),
     'type:note':         ('ededed', 'Note'),
+    'now':               ('ff0000', 'Jake wants this right now: the Worker pauses its current card to run it'),
+    'resume':            ('fbca04', 'Paused for a now card; runs again before other approved cards'),
     'pin':               ('000000', 'Spend/post/delete: the phone hub asks for the PIN before approving'),
     'owner:jake':        ('f9d0c4', 'Jake does this one'),
     'health':            ('0052cc', 'Machine health issue written by the watchdog'),
@@ -62,6 +69,7 @@ LABELS = {
 STATUSES = [n for n in LABELS if n.startswith('status:')]
 PRIORITY_ORDER = {'p0': 0, 'p1': 1, 'p2': 2}
 RUN_MARK = '<!-- jarvis:run -->'
+PROGRESS_MARK = '<!-- jarvis:progress -->'
 CLAIM_RE = re.compile(r'^<!-- jarvis:claim (\S+) (\S+) -->')
 META_RE = re.compile(r'<!-- jarvis:meta (\{.*?\}) -->')
 
@@ -233,10 +241,20 @@ def ready(machine, use_etag_file=None):
         if not ({'machine:any', f'machine:{machine}'} & set(names)) and any(n.startswith('machine:') for n in names):
             continue
         prio = min([PRIORITY_ORDER[n] for n in names if n in PRIORITY_ORDER] or [3])
+        lane = 0 if 'now' in names else 1 if 'resume' in names else 2
         out.append({'number': i['number'], 'title': i['title'], 'labels': names, 'priority': prio,
-                    'created_at': i['created_at']})
-    out.sort(key=lambda c: (c['priority'], c['created_at']))
+                    'now': lane == 0, 'created_at': i['created_at']})
+    # `now` cards first (oldest first, so two typed tasks run in the order Jake typed them), then paused
+    # cards picking up where they left off, then everything else by priority.
+    out.sort(key=lambda c: (0 if c['now'] else 1 if 'resume' in c['labels'] else 2, c['priority'], c['created_at']))
     return out
+
+
+def now_waiting(machine, use_etag_file=None):
+    """The oldest `now` card this machine may run, or None. Cheap enough to call every 15 s while a card runs
+    (with an ETag file an unchanged queue is a free 304)."""
+    cards = [c for c in ready(machine, use_etag_file) if c['now']]
+    return cards[0] if cards else None
 
 
 def claim(number, machine):
@@ -258,11 +276,11 @@ def claim(number, machine):
     if not winner or winner['id'] != mine['id']:
         api('DELETE', repo_path(f'/issues/comments/{mine["id"]}'))
         return False
-    set_status(number, 'working', extra_add=[f'claimed:{machine}'])
+    set_status(number, 'working', extra_add=[f'claimed:{machine}'], extra_remove=['resume'])
     return True
 
 
-OUTCOMES = ('done', 'needs-jake', 'failed', 'timeout', 'waiting-usage', 'released')
+OUTCOMES = ('done', 'needs-jake', 'failed', 'timeout', 'waiting-usage', 'released', 'paused')
 
 
 def log_run(number, machine, outcome, started=None, ended=None, summary='', log_tail='', model=''):
@@ -272,6 +290,7 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
     needs-jake     -> status:needs-jake (Workers stop re-running it until Jake answers)
     waiting-usage  -> back to status:approved (the card is fine; the account hit its limit)
     released       -> back to status:approved (Worker let go without running, e.g. shutting down)
+    paused         -> back to status:approved + `resume`, so it runs right after the `now` card that paused it
     failed/timeout -> back to status:approved once; a second failed/timeout run in a row -> needs-jake
     """
     if outcome not in OUTCOMES:
@@ -309,12 +328,15 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
         set_status(number, 'needs-jake', extra_remove=remove)
         return 'needs-jake'
     if outcome in ('failed', 'timeout'):
-        runs = [r for r in runs_of(number) if r.get('outcome') not in ('released', 'waiting-usage')]
+        runs = [r for r in runs_of(number) if r.get('outcome') not in ('released', 'waiting-usage', 'paused')]
         if len(runs) >= 2 and all(r.get('outcome') in ('failed', 'timeout') for r in runs[-2:]):
             set_status(number, 'needs-jake', extra_remove=remove)
             comment(number, 'Stopped after two failed runs in a row. Split the card or add detail, then '
                             'approve it again.')
             return 'needs-jake'
+    if outcome == 'paused':
+        set_status(number, 'approved', extra_add=['resume'], extra_remove=remove)
+        return 'approved'
     set_status(number, 'approved', extra_remove=remove)
     return 'approved'
 
@@ -355,6 +377,59 @@ def approve(number, by='hub'):
 def ask_jake(number, question):
     set_status(number, 'needs-jake', extra_remove=[f'claimed:{m}' for m in MACHINES])
     comment(number, f'**Needs Jake:** {question}')
+
+
+# ---------------------------------------------------------------------------- the "now" lane
+
+def progress(number, machine, text, comment_id=None):
+    """Create or rewrite the card's one progress comment (editing it, so the card doesn't fill up with
+    updates). Returns the comment id; pass it back on the next call. The Worker calls this 30 s into a run
+    and every 30 s after that, and once more when the run ends."""
+    body = f'{PROGRESS_MARK}\n**Progress on {machine}** (updated {now_iso()})\n\n{text.strip()[-3000:]}'
+    if comment_id:
+        try:
+            api('PATCH', repo_path(f'/issues/comments/{comment_id}'), {'body': body})
+            return comment_id
+        except GitHubError:
+            pass  # deleted by hand: start a new one
+    return comment(number, body)['id']
+
+
+def jake_now(title, body='', machine='homebase'):
+    """Jake's typed "do it now" task: approved at once (he typed it himself), labelled `now` and p0, then the
+    Workers are woken over the tailnet. Returns the issue number."""
+    number = new_card(title, body or title, machine=machine, priority='p0', status='approved',
+                      extra_labels=['now'])
+    comment(number, f'Typed by Jake for right now at {now_iso()}')
+    wake()
+    return number
+
+
+def watch(number, every=10, out=print, stop_after=None):
+    """Print the card's progress and final result as they change, until it is closed or stops for Jake.
+    Returns the final status (done / needs-jake / approved ...)."""
+    seen, started = None, time.time()
+    while True:
+        issue = api('GET', repo_path(f'/issues/{number}'))
+        comments = paged(repo_path(f'/issues/{number}/comments'))
+        latest = ''
+        for c in comments:
+            b = c.get('body') or ''
+            if b.startswith(PROGRESS_MARK) or b.startswith(RUN_MARK) or b.startswith('**Needs Jake:**'):
+                latest = re.sub(r'<!--.*?-->\n?', '', b).strip()
+        state = status_of(issue)
+        if latest and latest != seen:
+            out(latest)
+            out('-' * 40)
+            seen = latest
+        elif state == 'working' and not latest and seen is None:
+            out(f'#{number} claimed, running...')
+            seen = ''
+        if state in ('done', 'needs-jake'):
+            return state
+        if stop_after and time.time() - started > stop_after:
+            return state
+        time.sleep(every)
 
 
 # ---------------------------------------------------------------------------- health
@@ -454,6 +529,18 @@ def main(argv=None):
     s = sub.add_parser('usage', help='Worker minutes per card')
     s.add_argument('--days', type=int, default=7)
     sub.add_parser('wake', help='nudge the Workers over the tailnet')
+    s = sub.add_parser('now', help="Jake's task for right now: pauses the Worker's current card")
+    s.add_argument('title')
+    s.add_argument('--body', default='')
+    s.add_argument('--machine', default='homebase', choices=['any'] + MACHINES)
+    s.add_argument('--watch', action='store_true', help='print progress until it finishes')
+    s = sub.add_parser('watch', help="print a card's progress until it finishes")
+    s.add_argument('number', type=int)
+    s = sub.add_parser('progress', help="rewrite a card's progress comment")
+    s.add_argument('number', type=int)
+    s.add_argument('--machine', required=True)
+    s.add_argument('--text', required=True)
+    s.add_argument('--comment-id', type=int)
     a = p.parse_args(argv)
 
     try:
@@ -486,6 +573,15 @@ def main(argv=None):
                 print(f"#{t['number']:<5} {t['minutes']:7.1f} min  {t['runs']} runs  {t['outcomes']}")
         elif a.cmd == 'wake':
             wake()
+        elif a.cmd == 'now':
+            n = jake_now(a.title, a.body, a.machine)
+            print(f'#{n} https://github.com/{REPO}/issues/{n}')
+            if a.watch:
+                print(f'Finished: {watch(n)}')
+        elif a.cmd == 'watch':
+            print(f'Finished: {watch(a.number)}')
+        elif a.cmd == 'progress':
+            print(progress(a.number, a.machine, a.text, a.comment_id))
     except GitHubError as e:
         print(f'error: {e}', file=sys.stderr)
         return 2
