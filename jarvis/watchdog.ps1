@@ -376,21 +376,46 @@ $recentTaskLog = $newest -and $newest.Name -like 'task-*' -and ($now - $newest.L
 $openClaim     = $lastClaim -and ($now - $lastClaim).TotalMinutes -lt 50 -and (-not $claimLogAt -or $claimLogAt -lt $lastClaim)
 $worker = Get-WorkerState ($workerTaskRunning -or $recentTaskLog -or $openClaim) $pausedUntil $waiting $lastClaim $now $idleAfterMin
 
+# The Worker's own heartbeat (homebase agent.py writes C:\Jarvis\worker.heartbeat): a worker line, "Working: ..." or
+# "IDLE-REASON: <code> <detail>", and a rig line, "Rig: ...". When it is fresh it is the truth about the Worker,
+# better than inferring idle from the card count.
+$hbPath   = Join-Path (Split-Path $root -Parent) 'worker.heartbeat'
+$hbWorker = $null
+$hbRig    = $null
+if ((Test-Path $hbPath) -and ($now - (Get-Item $hbPath).LastWriteTime).TotalMinutes -lt 20) {
+    foreach ($l in @(Get-Content $hbPath -ErrorAction SilentlyContinue)) {
+        $v = ($l -replace '^\s*(worker|rig)\s*[:=]\s*(?=(Working|IDLE-REASON|Rig)\b)', '').Trim()
+        if (-not $hbWorker -and $v -match '^(Working|IDLE-REASON)\b') { $hbWorker = $v }
+        elseif (-not $hbRig -and ($v -match '^Rig\b' -or $l -match '^\s*rig\s*[:=]')) { $hbRig = ($v -replace '^\s*rig\s*[:=]\s*', '') }
+    }
+}
+$hbIdle = $null
+if ($hbWorker -match '^Working\b') { $worker = 'Working' }
+elseif ($hbWorker -match '^IDLE-REASON:?\s*(.*)$') {
+    $hbIdle = $Matches[1].Trim()
+    if ($hbIdle -match '(?i)usage|session limit|rate.?limit') { $worker = 'Paused (usage limit)' }
+    elseif ($hbIdle -match '(?i)^(no[-_ ]?(cards|work)|queue[-_ ]?empty|nothing)') { $worker = 'Idle'; $hbIdle = $null }
+    elseif ($worker -ne 'Paused (usage limit)') { $worker = 'Idle with cards waiting' }
+}
+
 $claimText = if ($lastClaim) { $lastClaim.ToString('MM/dd HH:mm') } else { 'never' }
 $workerLine = "Worker: $worker"
 if ($worker -eq 'Paused (usage limit)') { $workerLine += " until $($pausedUntil.ToString('MM/dd HH:mm'))" }
 $workerLine += ", last claim $claimText"
 if ($lastTitle) { $workerLine += " ($lastTitle)" }
 $lines.Insert(1, $workerLine)
+if ($hbWorker) { $lines.Insert(2, "  heartbeat: $hbWorker") }
+if ($hbRig)    { $lines.Insert($(if ($hbWorker) { 3 } else { 2 }), "  Rig: $hbRig") }
 if ($null -ne $waiting) {
     $names = @($waitingCards | Select-Object -First 3 | ForEach-Object { Plain $_.properties.Task.title })
-    $lines.Insert(2, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
+    $lines.Insert(2 + [int][bool]$hbWorker + [int][bool]$hbRig, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
 }
 
 if ($rcOutside) { $alerts.Add('Remote Control only running by hand (task copy not running); it stops if that terminal closes') }
 if ($rcState -eq 'Down') { $alerts.Insert(0, "Remote Control down, restart failed: run 'claude remote-control' in C:\Jarvis") }
 elseif ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
-if ($worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
+if ($hbIdle -and $worker -ne 'Paused (usage limit)') { $alerts.Insert(0, "Worker idle: $hbIdle") }
+elseif (-not $hbWorker -and $worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
 if ($needsJake) { $alerts.Insert(0, "Needs Jake: $needsJake") }
 $portsDown = @($portStatus | Where-Object { $_ -like '*DOWN' })
 if ($portsDown) { $alerts.Add('Down: ' + (($portsDown | ForEach-Object { ($_ -split ' :')[0] }) -join ', ')) }
