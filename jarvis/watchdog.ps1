@@ -98,7 +98,7 @@ if ($rcProc) {
             Log "Remote Control was down; back up ($how)."
             $lines.Add("Remote Control: WAS DOWN, restarted just now ($how)")
         } else {
-            $rcState = 'Restart failed'
+            $rcState = 'Down'   # existing red option in the Machine Health select
             Log "Remote Control was down and did NOT come back: $how"
             $lines.Add("Remote Control: DOWN, restart failed ($how). Run 'claude remote-control' in C:\Jarvis by hand.")
         }
@@ -293,7 +293,7 @@ if ($null -ne $waiting) {
     $lines.Insert(2, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
 }
 
-if ($rcState -eq 'Restart failed') { $alerts.Insert(0, "Remote Control down, restart failed: run 'claude remote-control' in C:\Jarvis") }
+if ($rcState -eq 'Down') { $alerts.Insert(0, "Remote Control down, restart failed: run 'claude remote-control' in C:\Jarvis") }
 elseif ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
 if ($worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
 if ($needsJake) { $alerts.Insert(0, "Needs Jake: $needsJake") }
