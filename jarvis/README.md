@@ -36,10 +36,14 @@ A lone "Remote Control restarted" isn't pushed, since the watchdog already fixed
 nothing can push; its row still turns red in Notion. Check the push path with
 `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -TestPush`.
 
-**How the Remote Control restart works:** if no `claude remote-control` process is running, the watchdog stops any
-stale run of the *Jarvis Remote Control* task and kills leftover wrapper windows (a stale run makes Task Scheduler refuse
-a new start with 0x800710E0), starts the task, and if Remote Control still isn't up 30 s later, starts the task's own
-command directly. What it did is in `logs\watchdog.log` and the row's Snapshot.
+**How the Remote Control check works:** the task's copy is found through Task Scheduler (the running task's process
+and the `claude.exe` under it), because on homebase the task runs as S4U in session 0, where the watchdog can't read
+command lines. A copy typed into a terminal is found by its command line. Remote Control counts as up if either is
+running; if only a hand-started copy is up, the watchdog starts the task's copy alongside it and leaves the hand copy
+alone. If nothing is up, it stops a task run that has no Remote Control under it (Task Scheduler otherwise refuses a
+new start with 0x800710E0), starts the task, and if that fails starts the task's command directly. What it did is in
+`logs\watchdog.log` and the row's Snapshot. Remote Control's own output is read from `C:\Jarvis\logs\remote-control.log`
+(or the installer's debug log), and its last lines go on the row when a restart fails.
 
 **Remote restart:** tick **Restart Remote Control** on a machine's Machine Health row (from your phone, or a cloud
 Claude session does it through Notion) and that machine's next watchdog run, within 5 minutes, restarts Remote Control
