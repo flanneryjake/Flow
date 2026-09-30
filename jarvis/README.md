@@ -62,3 +62,16 @@ python helper\gemini_helper.py research "free OCR libraries for Python"
 - Research tries Google Search grounding first. The free key had no search quota on 2026-09-29, so it falls back
   to the model's own knowledge and marks unsure items as unverified; check links before relying on them.
 - The free tier may use what you send for training, so don't send private documents.
+
+## Guardrails (what Jarvis may do without asking)
+
+`guardrails/GUARDRAILS.md` is the policy: four tiers (Free, Free + logged, Ask once, PIN) plus hard stops that nothing
+unlocks. `guardrails/policy.json` is the same thing for the approval hook and the Worker to read.
+
+Training data is in the Free + logged tier: Claude adds it through `guardrails/training_intake.py`, which copies files
+into `C:\Jarvis\training\<topic>\`, logs source and checksum to `_log\intake.jsonl`, refuses batches with secrets or
+patient identifiers, and can revert any batch. Install on homebase with:
+
+```powershell
+irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/guardrails/install.ps1 | iex
+```
