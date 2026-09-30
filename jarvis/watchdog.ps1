@@ -425,7 +425,7 @@ if ($DryRun) {
 $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding UTF8
 
 # Same row on GitHub (the pinned "Health: <machine>" issue in the tasks repo), while Notion is phased out.
-# Runs only once install-ghq.ps1 has set GITHUB_TASKS_TOKEN.
+# Runs only once GITHUB_TASKS_TOKEN is set (user environment variable) and ghq.py is in C:\Jarvis\ghq.
 $ghq = 'C:\Jarvis\ghq\ghq.py'
 $ghToken = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
 $py = Get-Command python, py -ErrorAction SilentlyContinue | Select-Object -First 1
