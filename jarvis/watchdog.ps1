@@ -36,28 +36,182 @@ function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-|ghp_|github
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("$(Get-Date -Format 'MM/dd HH:mm') $machine watchdog")
 
+$token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'User')
+if (-not $token) { $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'Machine') }
+if (-not $token) { $token = $env:NOTION_TOKEN }
+$headers = @{ Authorization = "Bearer $token"; 'Notion-Version' = '2022-06-28' }
+function Invoke-Notion([string]$method, [string]$path, $body) {
+    $json = $body | ConvertTo-Json -Depth 12
+    Invoke-RestMethod -Method $method -Uri "https://api.notion.com/v1/$path" -Headers $headers -TimeoutSec 30 `
+        -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
+}
+
+# Remote kick: ticking "Restart Remote Control" on this machine's Machine Health row (by Jake, or by a cloud Claude
+# session through Notion) makes this run restart Remote Control even if its process looks alive, e.g. when it is
+# running but no longer connected. Section 6 unticks it again.
+$kickProp = 'Restart Remote Control'
+$kickHas  = $false
+$kick     = $false
+if ($token -and $healthRows[$machine]) {
+    try {
+        $me = Invoke-RestMethod -Method Get -Uri "https://api.notion.com/v1/pages/$($healthRows[$machine])" -Headers $headers -TimeoutSec 30
+        if ($me.properties.PSObject.Properties.Name -contains $kickProp) {
+            $kickHas = $true
+            $kick = [bool]$me.properties.$kickProp.checkbox -and -not $DryRun
+        }
+    } catch { Log "Reading the health row for a restart request failed: $($_.Exception.Message)" }
+}
+
 # --- 1. Remote Control ---------------------------------------------------------------
-$rcProc = Get-CimInstance Win32_Process -Filter "Name='claude.exe' OR Name='node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'remote-control' }
-if ($rcProc) {
-    $rcState = 'Up'
-    $lines.Add("Remote Control: UP (pid $(@($rcProc)[0].ProcessId))")
-} else {
-    $task = Get-ScheduledTask -TaskName 'Jarvis Remote Control' -ErrorAction SilentlyContinue
-    if ($task) {
-        Start-ScheduledTask -TaskName 'Jarvis Remote Control'
-        Log 'Remote Control was down; started the task.'
-        $rcState = 'Restarted'
-        $lines.Add('Remote Control: WAS DOWN, restarted just now')
-    } else {
-        $rcState = 'Task missing'
-        $lines.Add('Remote Control: task missing (re-run install.ps1)')
+# Two kinds of copy can be running:
+#  - the task's copy. On homebase the task runs as S4U, so it lives in session 0, and this watchdog (not elevated)
+#    can't read its command line. It is found through Task Scheduler instead: the running task's engine PID (its
+#    powershell wrapper) and any claude.exe under it.
+#  - a copy typed into a terminal by hand, found by its command line (`claude remote-control`, whatever the exe name).
+$rcTaskName = 'Jarvis Remote Control'
+$wrappers = 'powershell.exe', 'pwsh.exe', 'cmd.exe', 'conhost.exe'
+function Get-Descendants($rootIds, $all) {
+    $found = New-Object System.Collections.Generic.List[object]
+    $queue = New-Object System.Collections.Generic.Queue[int]
+    foreach ($r in $rootIds) { $queue.Enqueue([int]$r) }
+    while ($queue.Count -gt 0) {
+        $id = $queue.Dequeue()
+        foreach ($c in @($all | Where-Object { $_.ParentProcessId -eq $id -and $_.ProcessId -ne $id })) {
+            if ($found.ProcessId -notcontains $c.ProcessId) { $found.Add($c); $queue.Enqueue([int]$c.ProcessId) }
+        }
+    }
+    return , $found
+}
+function Get-TaskEnginePids($task) {
+    try {
+        $svc = New-Object -ComObject Schedule.Service
+        $svc.Connect()
+        $path = $task.TaskPath + $task.TaskName
+        return @($svc.GetRunningTasks(1) | Where-Object { $_.Path -eq $path } | ForEach-Object { [int]$_.EnginePID } | Where-Object { $_ })
+    } catch {
+        # Fallback: a session-0 powershell started by Task Scheduler's svchost. Never guess "nothing is running",
+        # since that would make the watchdog stop a working copy.
+        $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+        $svch = @($all | Where-Object { $_.Name -ieq 'svchost.exe' } | ForEach-Object { $_.ProcessId })
+        return @($all | Where-Object { $_.SessionId -eq 0 -and $wrappers -contains "$($_.Name)".ToLower() -and $svch -contains $_.ParentProcessId } | ForEach-Object { [int]$_.ProcessId })
     }
 }
-$rcDebug = Join-Path $logDir 'remote-control-debug.log'
-if (Test-Path $rcDebug) {
+# Returns @{ task = claude.exe processes under the running task; hand = hand-started copies; engine = wrapper PIDs }
+function Get-RcCopies($task) {
+    $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $engine = if ($task) { Get-TaskEnginePids $task } else { @() }
+    $under = if ($engine) { Get-Descendants $engine $all } else { @() }
+    $taskRc = @($under | Where-Object { $_.Name -ieq 'claude.exe' -or $_.Name -ieq 'node.exe' })
+    $underIds = @($under | ForEach-Object { $_.ProcessId }) + $engine
+    # A hand copy's own child claude.exe (sessions it spawns) carries no remote-control in its command line, so
+    # counting only command-line matches keeps a hand copy to one entry per copy.
+    $hand = @($all | Where-Object {
+        $_.CommandLine -match '\bremote-control\b' -and $wrappers -notcontains "$($_.Name)".ToLower() -and
+        $_.ProcessId -ne $PID -and $underIds -notcontains $_.ProcessId
+    })
+    # A copy this watchdog started directly sits under a visible wrapper whose command line carries remote-control;
+    # that counts as the task's command, not a hand copy.
+    $hand = @($hand | Where-Object {
+        $pp = $_.ParentProcessId
+        -not ($all | Where-Object { $_.ProcessId -eq $pp -and $wrappers -contains "$($_.Name)".ToLower() -and $_.CommandLine -match '\bremote-control\b' })
+    })
+    $direct = @($all | Where-Object {
+        $_.CommandLine -match '\bremote-control\b' -and $wrappers -notcontains "$($_.Name)".ToLower() -and
+        $_.ProcessId -ne $PID -and $underIds -notcontains $_.ProcessId -and $hand.ProcessId -notcontains $_.ProcessId
+    })
+    return @{ task = @($taskRc) + $direct; hand = $hand; engine = $engine; all = $all }
+}
+function Test-RcUp($task) { $c = Get-RcCopies $task; return [bool]($c.task -or $c.hand) }
+
+# Restart order, each step only if the one before didn't bring Remote Control back:
+#  1. Stop the task run if Task Scheduler still holds one with no claude under it (a plain start is refused with
+#     0x800710E0 while a run is "going", because the task won't start a second instance), then start the task.
+#  2. Start the task's own command directly from this watchdog run (same user, hidden window).
+function Restart-RemoteControl($task, [bool]$force) {
+    $notes = New-Object System.Collections.Generic.List[string]
+    $c = Get-RcCopies $task
+    $task = Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+    if ($task.State -eq 'Running') {
+        Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+        $notes.Add($(if ($force) { 'stopped the task run' } else { 'stopped a task run with no Remote Control under it' }))
+    }
+    # Stop-ScheduledTask ends the wrapper; make sure nothing it started is left holding the registration.
+    foreach ($p in @($c.task)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($force) { foreach ($p in @($c.hand)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue; $notes.Add("stopped hand-started copy pid $($p.ProcessId)") } }
+    Start-Sleep -Seconds 2
+    try {
+        Start-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop
+        $notes.Add('started the task')
+    } catch {
+        $info = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+        $notes.Add("task start refused: $($_.Exception.Message.Trim()) (last result 0x$('{0:X8}' -f [int]$info.LastTaskResult))")
+    }
+    for ($i = 0; $i -lt 6 -and -not (Test-RcUp $task); $i++) { Start-Sleep -Seconds 5 }
+    if (Test-RcUp $task) { return @{ ok = $true; notes = $notes } }
+
+    $a = @($task.Actions)[0]
+    if ($a -and $a.Execute) {
+        try {
+            $sp = @{ FilePath = $a.Execute; WindowStyle = 'Hidden'; ErrorAction = 'Stop' }
+            if ($a.Arguments)        { $sp.ArgumentList = $a.Arguments }
+            if ($a.WorkingDirectory) { $sp.WorkingDirectory = $a.WorkingDirectory }
+            Start-Process @sp
+            $notes.Add('started the task command directly')
+        } catch { $notes.Add("direct start failed: $($_.Exception.Message.Trim())") }
+        for ($i = 0; $i -lt 6 -and -not (Test-RcUp $task); $i++) { Start-Sleep -Seconds 5 }
+        if (Test-RcUp $task) { return @{ ok = $true; notes = $notes } }
+    }
+    return @{ ok = $false; notes = $notes }
+}
+
+$rcOutside = $false
+$task = Get-ScheduledTask -TaskName $rcTaskName -ErrorAction SilentlyContinue
+$copies = Get-RcCopies $task
+if (-not $task) {
+    $rcState = if ($copies.hand) { 'Up' } else { 'Task missing' }
+    $lines.Add('Remote Control: task missing (re-run install.ps1)' + $(if ($copies.hand) { ', running by hand' } else { '' }))
+} elseif ($kick -or -not ($copies.task -or $copies.hand)) {
+    if ($kick) { Log 'Restart requested from the Machine Health row.'; $lines.Add('Remote Control: restart requested from Notion') }
+    $r = Restart-RemoteControl $task $kick
+    $how = $r.notes -join '; '
+    if ($r.ok) {
+        $rcState = 'Restarted'
+        Log "Remote Control restarted ($how)."
+        $lines.Add("Remote Control: restarted just now ($how)")
+    } else {
+        $rcState = 'Down'   # existing red option in the Machine Health select
+        Log "Remote Control was down and did NOT come back: $how"
+        $lines.Add("Remote Control: DOWN, restart failed ($how). Run 'claude remote-control' in C:\Jarvis by hand.")
+    }
+} else {
+    $rcState = 'Up'
+    $desc = @()
+    if ($copies.task) { $desc += "task copy pid $(@($copies.task)[0].ProcessId)" }
+    if ($copies.hand) { $desc += "hand-started pid $(@($copies.hand.ProcessId) -join ', ')" }
+    $lines.Add("Remote Control: UP ($($desc -join '; '))")
+    if (-not $copies.task) {
+        # Only a hand copy: it dies with its terminal, so bring the task's copy back alongside it (never stop it).
+        $r = Restart-RemoteControl $task $false
+        $after = Get-RcCopies $task
+        if ($after.task) { $lines.Add("  also started the task's copy ($($r.notes -join '; '))"); Log "Only a hand-started Remote Control was up; started the task's copy too." }
+        else { $rcOutside = $true }
+    }
+}
+# Remote Control's own output: the homebase task redirects it to C:\Jarvis\logs\remote-control.log; installs from
+# install.ps1 write a --debug-file into this folder.
+$rcDebug = @((Join-Path (Split-Path $root -Parent) 'logs\remote-control.log'), (Join-Path $logDir 'remote-control-debug.log')) |
+    Where-Object { Test-Path $_ } | Sort-Object { (Get-Item $_).LastWriteTime } -Descending | Select-Object -First 1
+if (-not $rcDebug) { $rcDebug = Join-Path $logDir 'remote-control-debug.log' }
+if ($rcState -eq 'Down' -and (Test-Path $rcDebug)) {
+    # Whatever Remote Control last wrote before it quit, so the reason is on the row without opening the PC.
+    $lw = (Get-Item $rcDebug).LastWriteTime
+    $lines.Add("  RC debug log last written $($lw.ToString('MM/dd HH:mm')), tail:")
+    Get-Content $rcDebug -Tail 4 -ErrorAction SilentlyContinue | ForEach-Object {
+        $l = (Redact $_).Trim(); $lines.Add('    ' + $l.Substring(0, [Math]::Min(200, $l.Length)))
+    }
+} elseif (Test-Path $rcDebug) {
     # Real problems only: skip the --verbose websocket traffic (it carries "is_error" etc.) and anything older than 30 min.
-    $bad = Select-String -Path $rcDebug -Pattern 'not trusted|requires a claude.ai|full-scope|not yet enabled|Enable Remote Control\?|trusted-device|could not|\[ERROR\]|failed' |
+    $bad = Get-Content $rcDebug -Tail 300 -ErrorAction SilentlyContinue | Select-String -Pattern 'not trusted|requires a claude.ai|full-scope|not yet enabled|Enable Remote Control\?|trusted-device|could not|\[ERROR\]|failed' |
         Where-Object { $_.Line -notmatch '\[bridge:ws\]|Error log sink' } |
         Where-Object { -not ($_.Line -match '^(\d{4}-\d\d-\d\dT[\d:.]+Z)') -or ((Get-Date) - [datetime]$Matches[1]).TotalMinutes -lt 30 } |
         Select-Object -Last 3
@@ -156,15 +310,6 @@ function Get-WorkerState([bool]$working, $pausedUntil, $waiting, $lastClaim, [da
     return 'Idle'
 }
 
-$token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'User')
-if (-not $token) { $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'Machine') }
-if (-not $token) { $token = $env:NOTION_TOKEN }
-$headers = @{ Authorization = "Bearer $token"; 'Notion-Version' = '2022-06-28' }
-function Invoke-Notion([string]$method, [string]$path, $body) {
-    $json = $body | ConvertTo-Json -Depth 12
-    Invoke-RestMethod -Method $method -Uri "https://api.notion.com/v1/$path" -Headers $headers -TimeoutSec 30 `
-        -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
-}
 
 $now         = Get-Date
 $alerts      = New-Object System.Collections.Generic.List[string]
@@ -240,7 +385,9 @@ if ($null -ne $waiting) {
     $lines.Insert(2, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
 }
 
-if ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
+if ($rcOutside) { $alerts.Add('Remote Control only running by hand (task copy not running); it stops if that terminal closes') }
+if ($rcState -eq 'Down') { $alerts.Insert(0, "Remote Control down, restart failed: run 'claude remote-control' in C:\Jarvis") }
+elseif ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
 if ($worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
 if ($needsJake) { $alerts.Insert(0, "Needs Jake: $needsJake") }
 $portsDown = @($portStatus | Where-Object { $_ -like '*DOWN' })
@@ -265,6 +412,7 @@ $props = [ordered]@{
     'Alert'             = @{ rich_text = (RT ($alerts -join '; ')) }
     'Snapshot'          = @{ rich_text = (RT $snapshot) }
 }
+if ($kickHas) { $props[$kickProp] = @{ checkbox = $false } }
 $row = $healthRows[$machine]
 if ($DryRun) {
     @{ row = $row; properties = $props } | ConvertTo-Json -Depth 12

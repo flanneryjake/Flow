@@ -16,7 +16,7 @@ Everything here has the home PC connect *out* instead:
 | Column | Meaning |
 | --- | --- |
 | Health | 🟢 OK, 🟠 plus the alert, or 🔴 Offline once the last check-in is over 15 min old (a Notion formula, so it works even when the PC is off) |
-| Remote Control | Up, Restarted (was down, watchdog started it), Task missing |
+| Remote Control | Up, Restarted (was down, watchdog brought it back), **Down** (still down after every restart step; the alert says "restart failed" and is pushed to the phone), Task missing |
 | Worker | Working, Idle, **Idle with cards waiting**, Paused (usage limit), Unknown |
 | Waiting cards | Approved + Auto-executable cards for this machine or Any with nothing in `Claimed by` |
 | Last claim / Last claimed card | Newest `Claimed by` stamp this machine wrote on the Tasks board |
@@ -36,12 +36,25 @@ A lone "Remote Control restarted" isn't pushed, since the watchdog already fixed
 nothing can push; its row still turns red in Notion. Check the push path with
 `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -TestPush`.
 
+**How the Remote Control check works:** the task's copy is found through Task Scheduler (the running task's process
+and the `claude.exe` under it), because on homebase the task runs as S4U in session 0, where the watchdog can't read
+command lines. A copy typed into a terminal is found by its command line. Remote Control counts as up if either is
+running; if only a hand-started copy is up, the watchdog starts the task's copy alongside it and leaves the hand copy
+alone. If nothing is up, it stops a task run that has no Remote Control under it (Task Scheduler otherwise refuses a
+new start with 0x800710E0), starts the task, and if that fails starts the task's command directly. What it did is in
+`logs\watchdog.log` and the row's Snapshot. Remote Control's own output is read from `C:\Jarvis\logs\remote-control.log`
+(or the installer's debug log), and its last lines go on the row when a restart fails.
+
+**Remote restart:** tick **Restart Remote Control** on a machine's Machine Health row (from your phone, or a cloud
+Claude session does it through Notion) and that machine's next watchdog run, within 5 minutes, restarts Remote Control
+even if its process still looks alive, then unticks the box. Use it when the Claude app shows the PC offline.
+
 Test without writing to Notion: `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -DryRun`
 
 Install once per machine, in a normal PowerShell window at that machine:
 
 ```powershell
-irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/install.ps1 | iex
+irm https://raw.githubusercontent.com/flanneryjake/Flow/main/jarvis/install.ps1 | iex
 ```
 
 The one-time questions (trust the folder, enable Remote Control) have to be answered at the keyboard.
