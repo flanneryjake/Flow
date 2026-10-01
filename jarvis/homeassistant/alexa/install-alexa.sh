@@ -15,7 +15,7 @@ CFG=$($DOCKER inspect -f '{{range .Mounts}}{{if eq .Destination "/config"}}{{.So
 [ -d "$CFG" ] || { echo "FAIL: can't find $CT's /config folder"; exit 1; }
 echo "ok: container $CT, config $CFG"
 
-if curl -fsS http://127.0.0.1:8123/api/onboarding | grep -q '"done":false'; then
+if curl -fsS http://127.0.0.1:8123/api/onboarding 2>/dev/null | grep -q '"done":false'; then
   echo "WAIT: HA onboarding isn't finished. Jake creates the owner account first."; exit 2
 fi
 
@@ -66,7 +66,7 @@ if ! $DOCKER exec "$CT" python -m homeassistant --script check_config --config /
 fi
 $DOCKER restart "$CT" >/dev/null
 for i in $(seq 1 60); do
-  curl -fsS -o /dev/null http://127.0.0.1:8123/manifest.json && { echo "ok: HA back up"; exit 0; }
+  curl -fsS -o /dev/null http://127.0.0.1:8123/manifest.json 2>/dev/null && { echo "ok: HA back up"; exit 0; }
   sleep 3
 done
 echo "FAIL: HA didn't come back within 3 minutes"; exit 1

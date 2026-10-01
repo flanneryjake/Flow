@@ -9,7 +9,7 @@ jarvis-bot service user that install-alexa.sh creates, so no token is ever paste
   python jarvis_alexa.py heard [--hours 24]    # latest thing said to each Echo (full history is in export)
   python jarvis_alexa.py export [--day 2026-10-01]   # one day of apartment state changes -> routine log
 
-Files (all under C:\\Jarvis by default, override with JARVIS_HOME):
+Files (all under C:\\Jarvis by default, override with JARVIS_ALEXA_HOME):
   secrets\\ha-bot.json     {"username", "password"}  written by install-alexa.sh
   secrets\\ha-token.json   {"refresh_token"}         written by `login`
   routine\\YYYY-MM-DD.jsonl one state change per line, input for routine learning
@@ -25,7 +25,7 @@ import urllib.request
 
 HA_URL = os.environ.get("HA_URL", "http://127.0.0.1:8123").rstrip("/")
 CLIENT_ID = HA_URL + "/"
-HOME = os.environ.get("JARVIS_HOME", r"C:\Jarvis")
+HOME = os.environ.get("JARVIS_ALEXA_HOME", r"C:\Jarvis")
 BOT_FILE = os.path.join(HOME, "secrets", "ha-bot.json")
 TOKEN_FILE = os.path.join(HOME, "secrets", "ha-token.json")
 ROUTINE_DIR = os.path.join(HOME, "routine")

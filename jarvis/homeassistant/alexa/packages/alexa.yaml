@@ -11,14 +11,19 @@ script:
         description: What to say
         example: Dinner's ready
         required: true
-        selector: { text: {} }
+        selector:
+          text:
       echo:
         description: One Echo media player, or leave empty for all of them
-        selector: { entity: { integration: alexa_media, domain: media_player } }
+        selector:
+          entity:
+            integration: alexa_media
+            domain: media_player
       announce:
         description: Announcement chime first
         default: false
-        selector: { boolean: {} }
+        selector:
+          boolean:
     sequence:
       - action: notify.alexa_media
         data:

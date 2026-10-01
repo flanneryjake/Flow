@@ -6,7 +6,7 @@ import tempfile
 import threading
 import unittest
 
-os.environ["JARVIS_HOME"] = tempfile.mkdtemp()
+os.environ["JARVIS_ALEXA_HOME"] = tempfile.mkdtemp()
 import jarvis_alexa as ja  # noqa: E402
 
 KITCHEN = {"entity_id": "media_player.kitchen_echo", "state": "idle",
