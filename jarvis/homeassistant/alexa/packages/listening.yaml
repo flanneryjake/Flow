@@ -1,0 +1,25 @@
+# "Jarvis listening" switch (Jake asked 2026-10-01): when on, Jarvis's own room mic (the Hey Jarvis satellite, once it
+# exists) transcribes conversation locally and Jarvis may chime in through the nearest Echo. Echos can't be used for
+# this: Amazon only sends audio after the wake word. Off by default. Massachusetts requires everyone's consent to
+# record a conversation, so it stays off with guests unless they agree, and no audio is ever kept.
+
+input_boolean:
+  jarvis_listening:
+    name: Jarvis listening
+    icon: mdi:ear-hearing
+
+automation:
+  - id: jarvis_listening_announce
+    alias: Say when Jarvis starts or stops listening
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.jarvis_listening
+        to: ["on", "off"]
+    actions:
+      - action: script.jarvis_say
+        data:
+          echo: media_player.kitchen
+          message: >-
+            {{ 'Jarvis is listening to the room now.' if trigger.to_state.state == 'on'
+               else 'Jarvis stopped listening.' }}
