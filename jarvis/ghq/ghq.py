@@ -208,6 +208,8 @@ def ready(machine, use_etag_file=None):
 
     With use_etag_file, the list is cached and re-fetched with If-None-Match, so an unchanged queue costs
     nothing against the API rate limit. Polling every 60 s is fine either way."""
+    if not fleet_allows(machine):
+        return []  # paused or disconnected from the phone app's Fleet panel (fleet/fleet.py)
     path = repo_path('/issues?state=open&labels=status:approved&per_page=100&sort=created&direction=asc')
     cache = {}
     if use_etag_file and os.path.exists(use_etag_file):
@@ -237,6 +239,20 @@ def ready(machine, use_etag_file=None):
                     'created_at': i['created_at']})
     out.sort(key=lambda c: (c['priority'], c['created_at']))
     return out
+
+
+def fleet_allows(machine):
+    """False when the Fleet panel has this machine paused or disconnected. True if fleet.py isn't installed."""
+    for p in (os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fleet'), r'C:\Jarvis\fleet'):
+        if os.path.exists(os.path.join(p, 'fleet.py')):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+            break
+    try:
+        import fleet
+    except ImportError:
+        return True
+    return fleet.may_take_cards(machine)
 
 
 def claim(number, machine):
