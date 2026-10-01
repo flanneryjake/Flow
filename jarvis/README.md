@@ -54,7 +54,7 @@ Test without writing to Notion: `powershell -File C:\Jarvis\watchdog\watchdog.ps
 Install once per machine, in a normal PowerShell window at that machine:
 
 ```powershell
-irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/install.ps1 | iex
+$t=[Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN','User'); if(!$t){$t=Read-Host 'GitHub token'; [Environment]::SetEnvironmentVariable('GITHUB_TASKS_TOKEN',$t,'User')}; irm -Headers @{Authorization="Bearer $t"; Accept='application/vnd.github.raw'} 'https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/install.ps1?ref=claude/eager-knuth-lakcxt' | iex
 ```
 
 The one-time questions (trust the folder, enable Remote Control) have to be answered at the keyboard.

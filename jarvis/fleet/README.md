@@ -56,7 +56,7 @@ What keeps things running when a PC dies without warning:
 After `install-ghq.ps1` (it sets `GITHUB_TASKS_TOKEN`), in a normal PowerShell window:
 
 ```powershell
-irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/fleet/install-fleet.ps1 | iex
+$t=[Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN','User'); if(!$t){$t=Read-Host 'GitHub token'; [Environment]::SetEnvironmentVariable('GITHUB_TASKS_TOKEN',$t,'User')}; irm -Headers @{Authorization="Bearer $t"; Accept='application/vnd.github.raw'} 'https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/fleet/install-fleet.ps1?ref=claude/eager-knuth-lakcxt' | iex
 ```
 
 It saves the files to `C:\Jarvis\fleet`, adds the Worker gate to this PC's own `C:\Jarvis\ghq\ghq.py` (keeping local changes, with a backup), registers the hidden **Jarvis Fleet**

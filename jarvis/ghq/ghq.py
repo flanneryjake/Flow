@@ -10,7 +10,7 @@ used for an instant nudge: after an approval, `approve` POSTs to each Worker's /
 so the card starts at once instead of on the next poll.
 
 Standard library only (Python 3.8+). Config comes from environment variables:
-  GITHUB_TASKS_TOKEN  fine-grained token limited to the tasks repo (Issues: read/write, Metadata: read)
+  GITHUB_TASKS_TOKEN  fine-grained token: tasks repo (Issues: read/write, Metadata: read), plus Flow (Contents: read) for the installers
   JARVIS_TASKS_REPO   owner/name, default flanneryjake/jarvis-tasks
   JARVIS_WAKE_URLS    optional, comma-separated, e.g. http://homebase:8790/wake,http://rig:8790/wake
 
