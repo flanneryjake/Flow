@@ -198,6 +198,25 @@ if (-not $task) {
         else { $rcOutside = $true }
     }
 }
+# Keep Remote Control ahead of heavy jobs (docker pulls in WSL, model runs) so a busy PC doesn't drop its
+# connection: Remote Control and the sessions it spawns get AboveNormal priority. Memory goes on the snapshot,
+# so a drop under memory pressure shows up on the row.
+$memAlert = $null
+$rcNow = Get-RcCopies $task
+$rcIds = @(@($rcNow.task) + @($rcNow.hand) | ForEach-Object { [int]$_.ProcessId })
+if ($rcIds -and -not $DryRun) {
+    $rcTree = @($rcIds) + @(Get-Descendants $rcIds $rcNow.all | ForEach-Object { [int]$_.ProcessId })
+    foreach ($id in ($rcTree | Select-Object -Unique)) {
+        try { $p = Get-Process -Id $id -ErrorAction Stop; if ($p.PriorityClass -eq 'Normal') { $p.PriorityClass = 'AboveNormal' } } catch { }
+    }
+}
+try {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $freeGb = [Math]::Round($os.FreePhysicalMemory / 1MB, 1); $totGb = [Math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+    $wsl = @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum
+    $lines.Add("Memory: $freeGb GB free of $totGb GB" + $(if ($wsl) { ", WSL using $([Math]::Round($wsl / 1GB, 1)) GB" } else { '' }))
+    if ($totGb -gt 0 -and $freeGb / $totGb -lt 0.07) { $memAlert = ("Low memory: $freeGb GB free of $totGb GB" + $(if ($wsl) { " (WSL $([Math]::Round($wsl / 1GB, 1)) GB)" } else { '' }) + '; Remote Control may drop') }
+} catch { }
 # Remote Control's own output: the homebase task redirects it to C:\Jarvis\logs\remote-control.log; installs from
 # install.ps1 write a --debug-file into this folder.
 $rcDebug = @((Join-Path (Split-Path $root -Parent) 'logs\remote-control.log'), (Join-Path $logDir 'remote-control-debug.log')) |
@@ -316,6 +335,7 @@ function Get-WorkerState([bool]$working, $pausedUntil, $waiting, $lastClaim, [da
 
 $now         = Get-Date
 $alerts      = New-Object System.Collections.Generic.List[string]
+if ($memAlert) { $alerts.Add($memAlert) }
 $waiting     = $null
 $waitingCards = @()
 $pausedUntil = $null

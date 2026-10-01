@@ -76,6 +76,22 @@ python helper\gemini_helper.py research "free OCR libraries for Python"
   to the model's own knowledge and marks unsure items as unverified; check links before relying on them.
 - The free tier may use what you send for training, so don't send private documents.
 
+## Heavy jobs and Remote Control drops
+
+A big job on homebase (docker pulls in WSL, a model run) can starve Remote Control of memory, CPU or network, and the
+connection drops even though the PC stays up. The watchdog raises Remote Control and the sessions it spawns to
+AboveNormal priority on every run, puts free memory and WSL's share on the row, and alerts "Low memory" under 7% free.
+
+WSL2 can take up to half the RAM by default. To cap it, run this once in PowerShell. It keeps an existing
+`.wslconfig` and uses 40% of RAM and all but one core:
+
+```powershell
+$f="$env:USERPROFILE\.wslconfig"; if (Test-Path $f) { Get-Content $f } else { $gb=[Math]::Max(2,[Math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB*0.4)); $c=[Math]::Max(1,[Environment]::ProcessorCount-1); Set-Content $f "[wsl2]`nmemory=${gb}GB`nprocessors=$c" -Encoding ASCII; Get-Content $f }
+```
+
+The cap applies the next time WSL starts (`wsl --shutdown`, or a reboot), which also restarts the containers, so do
+it when nothing is installing.
+
 ## No flashing windows
 
 A scheduled task that starts `powershell.exe`, `cmd.exe` or `python.exe` flashes a console for a split second on
