@@ -10,6 +10,7 @@ It touches nothing else; the Notion Machine Health row stays the job of the exis
 """
 import datetime as dt
 import json
+import re
 import os
 import subprocess
 import sys
@@ -98,8 +99,59 @@ def ensure_worker():
     return 'starting'
 
 
+REVIEW_REPO = r'C:\Jarvis\laptop-review-repo'   # clone of jarvis-outputs on its orphan branch laptop-review
+JOBS = os.path.join(HERE, 'logs', 'laptop-jobs.jsonl')
+REVIEW_STATE = os.path.join(HERE, 'logs', 'review-push.json')
+SECRET = re.compile(r'(ntn_|secret_|sk-ant-|sk-|ghp_|github_pat_)[A-Za-z0-9_\-]{16,}')
+
+
+def git(*args):
+    return subprocess.run(['git', '-C', REVIEW_REPO, *args], capture_output=True, text=True, timeout=120,
+                          creationflags=0x08000000)
+
+
+def push_review(force=False):
+    """Hourly: copy the laptop Worker's job log (secrets redacted) to jarvis-outputs branch laptop-review, where
+    homebase picks it up as a review queue for Baby Jarvis training. Never touches the repo's main branch."""
+    if not os.path.exists(JOBS) or not os.path.isdir(os.path.join(REVIEW_REPO, '.git')):
+        return 'skipped'
+    try:
+        with open(REVIEW_STATE, encoding='utf-8') as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        st = {}
+    mtime = os.path.getmtime(JOBS)
+    if not force and (mtime <= st.get('mtime', 0) or time.time() - st.get('at', 0) < 3300):
+        return 'unchanged'
+    dest = os.path.join(REVIEW_REPO, 'review', 'laptop-jobs.jsonl')
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(JOBS, encoding='utf-8') as f, open(dest, 'w', encoding='utf-8', newline='\n') as o:
+        o.write(SECRET.sub('<redacted>', f.read()))
+    git('pull', '-q', '--rebase', 'origin', 'laptop-review')
+    git('add', 'review/laptop-jobs.jsonl')
+    if git('diff', '--cached', '--quiet').returncode == 0:
+        st.update(mtime=mtime, at=time.time())
+    else:
+        git('-c', 'user.name=flanneryjake', '-c', 'user.email=119984498+flanneryjake@users.noreply.github.com',
+            'commit', '-q', '-m', f'Laptop jobs {dt.datetime.now():%Y-%m-%d %H:%M}')
+        r = git('push', '-q', 'origin', 'laptop-review')
+        if r.returncode != 0:
+            log(f'review push failed: {r.stderr.strip()[:200]}')
+            return 'failed'
+        st.update(mtime=mtime, at=time.time())
+        log('pushed laptop jobs to jarvis-outputs laptop-review')
+    with open(REVIEW_STATE, 'w', encoding='utf-8') as f:
+        json.dump(st, f)
+    return 'pushed'
+
+
 if __name__ == '__main__':
     o = ensure_ollama()
     w = ensure_worker()
+    try:
+        rv = push_review('--push-now' in sys.argv)
+    except Exception as e:
+        rv = f'error {e}'
+        log(f'review push error: {e}')
     if '--verbose' in sys.argv:
-        print(f'ollama: {o}, worker: {w}')
+        print(f'ollama: {o}, worker: {w}, review: {rv}')
