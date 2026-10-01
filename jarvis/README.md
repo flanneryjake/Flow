@@ -18,7 +18,7 @@ Everything here has the home PC connect *out* instead:
 | Health | 🟢 OK, 🟠 plus the alert, or 🔴 Offline once the last check-in is over 15 min old (a Notion formula, so it works even when the PC is off) |
 | Remote Control | Up, Restarted (was down, watchdog brought it back), **Down** (still down after every restart step; the alert says "restart failed" and is pushed to the phone), Task missing |
 | Worker | Working, Idle, **Idle with cards waiting**, Paused (usage limit), Unknown |
-| Waiting cards | Approved + Auto-executable cards for this machine or Any with nothing in `Claimed by` |
+| Waiting cards | Approved + Auto-executable cards for this machine or Any with nothing in `Claimed by`. On a PC whose Worker reads GitHub (`JARVIS_QUEUE=github`): open `status:approved` issues with no `claimed:*` label for this machine or any, plus Notion cards still Approved that have no GitHub copy |
 | Last claim / Last claimed card | Newest `Claimed by` stamp this machine wrote on the Tasks board |
 | Alert | Why the row isn't green |
 | Snapshot | Full text: Remote Control, ports, Jarvis scheduled tasks, tail of the newest Worker log |

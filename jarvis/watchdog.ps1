@@ -317,6 +317,7 @@ function Get-WorkerState([bool]$working, $pausedUntil, $waiting, $lastClaim, [da
 $now         = Get-Date
 $alerts      = New-Object System.Collections.Generic.List[string]
 $waiting     = $null
+$waitingCards = @()
 $pausedUntil = $null
 $claimLogAt  = $null
 $statePath   = Join-Path $root 'state.json'
@@ -360,6 +361,63 @@ if ($token) {
     } catch {
         $alerts.Add('Could not read the Tasks board: ' + $_.Exception.Message)
         Log "Tasks query failed: $($_.Exception.Message)"
+    }
+}
+$waitingNames = @($waitingCards | ForEach-Object { Plain $_.properties.Task.title })
+
+# A machine whose Worker reads GitHub Issues (JARVIS_QUEUE=github) counts its waiting cards there instead:
+# open, status:approved, unclaimed, for this machine or any; plus Notion cards still Approved that have no GitHub
+# copy yet (no issue with the same title or carrying the Notion page id). Claims come from the claim comments.
+$queueMode = @('Process', 'User', 'Machine') | ForEach-Object { [Environment]::GetEnvironmentVariable('JARVIS_QUEUE', $_) } |
+    Where-Object { $_ } | Select-Object -First 1
+if ("$queueMode".Trim().ToLower() -eq 'github') {
+    $ghTok  = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
+    $ghRepo = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
+    $waiting = $null
+    if (-not $ghTok) {
+        $alerts.Add('Worker reads GitHub but GITHUB_TASKS_TOKEN is not set; waiting cards unknown')
+    } else {
+        try {
+            $ghHdr = @{ Authorization = "Bearer $ghTok"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'jarvis-watchdog' }
+            $issues = @(); $page = 1
+            do {
+                $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=all&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30)
+                $issues += $batch; $page++
+            } while ($batch.Count -eq 100 -and $page -le 10)
+            $issues = @($issues | Where-Object { -not $_.pull_request })
+            $ghReady = @($issues | Where-Object {
+                $n = @($_.labels | ForEach-Object { $_.name })
+                $_.state -eq 'open' -and $n -contains 'status:approved' -and -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
+                    ($n -contains 'machine:any' -or $n -contains "machine:$machine" -or -not @($n | Where-Object { $_ -like 'machine:*' }))
+            })
+            $ghTitles = @{}; foreach ($i in $issues) { $ghTitles["$($i.title)".Trim().ToLower()] = $true }
+            $ghBodies = ($issues | ForEach-Object { "$($_.body)" }) -join "`n"
+            $notionOnly = @($waitingCards | Where-Object {
+                -not $ghTitles.ContainsKey((Plain $_.properties.Task.title).Trim().ToLower()) -and
+                    -not $ghBodies.Contains("$($_.id)") -and -not $ghBodies.Contains("$($_.id)".Replace('-', ''))
+            })
+            $waiting = $ghReady.Count + $notionOnly.Count
+            $waitingNames = @($ghReady | ForEach-Object { "#$($_.number) $($_.title)" }) + @($notionOnly | ForEach-Object { Plain $_.properties.Task.title })
+
+            # Newest claim by this machine, and whether a run was logged after it.
+            $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30)
+            $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+            if ($claimC) {
+                $t = ([datetime]$claimC.created_at).ToLocalTime()
+                if (-not $lastClaim -or $t -gt $lastClaim) {
+                    $lastClaim  = $t
+                    $num        = [int](($claimC.issue_url -split '/')[-1])
+                    $lastTitle  = "#$num " + "$(($issues | Where-Object { $_.number -eq $num } | Select-Object -First 1).title)"
+                    $claimLogAt = $null
+                    $runC = $cm | Where-Object { $_.issue_url -eq $claimC.issue_url -and "$($_.body)" -match "jarvis:runmeta \{[^}]*`"machine`": `"$machine`"" } | Select-Object -First 1
+                    if ($runC) { $claimLogAt = ([datetime]$runC.created_at).ToLocalTime() }
+                }
+            }
+        } catch {
+            $waiting = $null
+            $alerts.Add('Could not read the GitHub task queue: ' + $_.Exception.Message)
+            Log "GitHub queue query failed: $(Redact $_.Exception.Message)"
+        }
     }
 }
 foreach ($l in @($tail) + @($agentLines)) {
@@ -408,7 +466,7 @@ $lines.Insert(1, $workerLine)
 if ($hbWorker) { $lines.Insert(2, "  heartbeat: $hbWorker") }
 if ($hbRig)    { $lines.Insert($(if ($hbWorker) { 3 } else { 2 }), "  Rig: $hbRig") }
 if ($null -ne $waiting) {
-    $names = @($waitingCards | Select-Object -First 3 | ForEach-Object { Plain $_.properties.Task.title })
+    $names = @($waitingNames | Select-Object -First 3)
     $lines.Insert(2 + [int][bool]$hbWorker + [int][bool]$hbRig, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
 }
 
