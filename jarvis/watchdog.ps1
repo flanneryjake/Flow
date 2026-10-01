@@ -23,6 +23,7 @@ if (-not $machine) { $machine = $env:COMPUTERNAME }
 $healthRows = @{
     homebase = '3ea11c3639af816bbd70fd523fe28b81'
     rig      = '3ea11c3639af81b5af25cb91f2f88cdd'
+    laptop   = '3eb11c3639af81188552c1a198ebf5f6'
 }
 $tasksDb      = '7c1c59e927644dfba461c88a67dbd32c'   # Notion Tasks board
 $idleAfterMin = 15   # Worker counts as idle with cards waiting once nothing has been claimed for this long
@@ -222,7 +223,7 @@ if ($rcState -eq 'Down' -and (Test-Path $rcDebug)) {
 }
 
 # --- 2. Listening ports ---------------------------------------------------------------
-$ports = if ($machine -eq 'rig') { @{ 'ollama' = 11434 } } else { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790 } }
+$ports = if ($machine -in 'rig', 'laptop') { @{ 'ollama' = 11434 } } else { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790 } }
 $portStatus = foreach ($k in $ports.Keys) {
     $up = Get-NetTCPConnection -State Listen -LocalPort $ports[$k] -ErrorAction SilentlyContinue
     "$k :$($ports[$k]) " + $(if ($up) { 'up' } else { 'DOWN' })
