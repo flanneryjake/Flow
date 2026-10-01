@@ -26,6 +26,7 @@ PORT = int(os.environ.get("HEY_JARVIS_PORT", "8796"))
 HOME = os.environ.get("HEY_JARVIS_HOME", r"C:\Jarvis\rig-voice")
 # HA webhook that speaks on an Echo (packages/rig_voice.yaml); JARVIS_ECHO picks the Echo in the rig's room.
 ECHO = os.environ.get("JARVIS_ECHO", "media_player.kitchen")
+HA_WEBHOOKS = os.environ.get("JARVIS_HA_WEBHOOKS", "http://100.90.201.22:8123/api/webhook/")  # only HA may set say_url
 FOLLOW_UP_S = 20
 LOG = os.path.join(HOME, "hey_jarvis.log")
 RATE = 16000
@@ -70,7 +71,7 @@ class Control(http.server.BaseHTTPRequestHandler):
             on = body.get("on")
             if isinstance(on, str):
                 on = on.lower() in ("on", "true", "1")
-            if isinstance(body.get("say_url"), str) and body["say_url"].startswith("http"):
+            if isinstance(body.get("say_url"), str) and body["say_url"].startswith(HA_WEBHOOKS):
                 state["say_url"] = body["say_url"]
             set_listening(bool(on))
             self._send(200, {"listening": state["listening"]})

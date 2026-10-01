@@ -49,10 +49,14 @@ class Test(unittest.TestCase):
         srv = hj.serve(port=0)
         url = "http://127.0.0.1:%d/listening" % srv.server_port
         self.assertFalse(json.loads(urllib.request.urlopen(url).read())["listening"])
-        req = urllib.request.Request(url, data=json.dumps({"on": False, "say_url": "http://ha/hook"}).encode(),
+        req = urllib.request.Request(url, data=json.dumps({"on": False, "say_url": hj.HA_WEBHOOKS + "x"}).encode(),
                                      method="POST")
         urllib.request.urlopen(req).close()
-        self.assertEqual(hj.state["say_url"], "http://ha/hook")
+        self.assertEqual(hj.state["say_url"], hj.HA_WEBHOOKS + "x")
+        req = urllib.request.Request(url, data=json.dumps({"on": False, "say_url": "http://evil/x"}).encode(),
+                                     method="POST")
+        urllib.request.urlopen(req).close()
+        self.assertEqual(hj.state["say_url"], hj.HA_WEBHOOKS + "x")
         for sent, want in ((True, True), ("off", False), ("on", True), (False, False)):
             req = urllib.request.Request(url, data=json.dumps({"on": sent}).encode(), method="POST")
             self.assertEqual(json.loads(urllib.request.urlopen(req).read())["listening"], want)
