@@ -22,6 +22,11 @@ FREE = [
     ('GATE TEST 2: email Jake a test', ''),
     ('Draft the Etsy listing copy for product #1', ''),
     ('Build native Hub v3 screens instead of the Live tab', ''),
+    ('[Income] Payday budget pinger: rig LLM weekly spend summary', ''),
+    ('[QOL] Automated budget tracker that flags spending against next paycheck', ''),
+    ('Reply to Jake with the test results', ''),
+    ('Forward the printer log to homebase', ''),
+    ('Send the report to Drive and progress to Notion', ''),
 ]
 ASK_ONCE = [
     ('Move AdGuard Home to homebase (junky laptop), then drop Cloudflare from Tailscale DNS', ''),
@@ -38,6 +43,11 @@ PIN = [
     ('Merge PR 9 into main', ''),
     ('Turn on Tailscale Funnel for the hub', ''),
     ('Reset the Notion API token', ''),
+    ('Spend $20 on ads', ''),
+    ('Reply to the landlord', ''),
+    ('Forward the invoice to accounting', ''),
+    ('Send Dana the proposal', ''),
+    ('Send them the signed lease', ''),
     ('Anything', ''),  # via label
 ]
 

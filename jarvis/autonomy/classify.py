@@ -25,14 +25,23 @@ _NEGATION = re.compile(
     r"draft(?:s|ed|ing)?|propos(?:e|al|ed)|plan(?:s|ned)?|idea|research|review|compare|estimate|cost(?:ed)?)\b"
     r"[^.;:\n]{0,40}$", re.I)
 
+# Destinations that stay inside Jarvis, so "send X to the rig" or "reply to Jake" is not messaging someone.
+_INTERNAL = (r"(?:(?:the |my |jake(?:'s|s)? )?(?:jake|me|myself|rig|homebase|hub|worker|phone|notion|github|drive|"
+             r"google drive|calendar|inbox|queue|board|folder|repo|printer|pi|laptop|claude|gemini|ollama|jarvis|"
+             r"a file|file|disk|this card|the card)\b)")
+
 # kind -> patterns. Each pattern should describe *doing* the thing, not mentioning it.
 PIN_RULES = {
     'spend-money': [
         r'\b(buy|purchase|order|pay for|pay|checkout|subscribe to|upgrade to (?:a )?paid|renew)\b(?! (?:attention|off)\b)',
         r'\b(add|enter|use) (?:a |the |my )?(credit card|debit card|payment method)\b',
+        r'\bspend\b\s+(?:\$|\d|money|cash|up to|on\b)',
     ],
     'post-external': [
-        r"\b(send|email|e-mail|text|dm|message)\b(?:(?!\bto\b)[^.\n]){0,40}\bto (?!(?:the |my |jake(?:'s|s)? )?(?:jake|me|myself|rig|homebase|hub|worker|phone|notion|github|drive|google drive|calendar|inbox|queue|board|folder|repo|printer|pi|laptop|claude|gemini|ollama|jarvis|a file|file|disk)\b)\w+",
+        r"\b(send|email|e-mail|text|dm|message|forward)\b(?:(?!\bto\b)[^.\n]){0,40}\bto (?!" + _INTERNAL + r")\w+",
+        r"\b(reply|respond|write back)\b to (?!" + _INTERNAL + r")\w+",
+        # "Send Dana the proposal", "Send them the invoice": a person, then the thing
+        r"\bsend (?:(?-i:[A-Z])[a-z]+|him|her|them|the (?:client|customer|landlord|buyer|seller)) (?:the|a|an|my|our|his|her|their|this|that)\b",
         r'\b(email|e-mail|text|dm|message)\b (?:the |a |our |my )?(clients?|customers?|patients?|someone|people|list|subscribers)\b',
         r'\b(post|tweet|share)\b[^.\n]{0,40}?\b(?:to|on) (twitter|x|instagram|facebook|reddit|linkedin|tiktok|youtube|social|etsy|gumroad|shopify|ebay|the store)',
         r'\b(publish|go live|make (?:it )?public|launch the store|list (?:it|them|the \w+) (?:on|for sale))\b',
