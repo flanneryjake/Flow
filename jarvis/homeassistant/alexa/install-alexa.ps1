@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $dest = 'C:\Jarvis\alexa'
 New-Item -ItemType Directory -Force -Path "$dest\packages", 'C:\Jarvis\routine' | Out-Null
 Copy-Item "$PSScriptRoot\jarvis_alexa.py", "$PSScriptRoot\install-alexa.sh", "$PSScriptRoot\README.md" $dest -Force
-Copy-Item "$PSScriptRoot\packages\alexa.yaml" "$dest\packages" -Force
+Copy-Item "$PSScriptRoot\packages\*.yaml" "$dest\packages" -Force
 
 # WSL wants LF line endings on the shell script.
 $sh = "$dest\install-alexa.sh"

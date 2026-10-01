@@ -1,0 +1,72 @@
+# Jake's weekday mornings (asked 2026-10-01): Tue-Sat alarms at 4:00, 4:10, 4:15, 4:25, 4:30, 4:35, 4:40 AM on the
+# Master bedroom Echo, and music at 4:45 AM.
+#
+# The alarms are real Alexa one-time alarms that HA sets the evening before. So "Alexa, cancel/turn off my alarms"
+# works the normal way and clears only that morning; the next scheduled evening HA sets them again.
+# Setting them is muted (volume 0, then restored) so Alexa's "alarm set" replies don't talk at 9 PM.
+
+automation:
+  - id: jarvis_set_morning_alarms
+    alias: Set tomorrow's 4 AM alarms (Mon-Fri evenings)
+    mode: single
+    triggers:
+      - trigger: time
+        at: "21:00:00"
+      - trigger: event          # manual re-run: fire event jarvis_set_morning_alarms
+        event_type: jarvis_set_morning_alarms
+    conditions:
+      - condition: time
+        weekday: [mon, tue, wed, thu, fri]
+    actions:
+      - variables:
+          echo: >-
+            {{ integration_entities('alexa_media') | select('match', 'media_player\.')
+               | select('is_state_attr', 'friendly_name', 'Master bedroom') | first | default('') }}
+          alarm_sensor: "{{ echo | replace('media_player.', 'sensor.') ~ '_next_alarm' }}"
+          times: ["04:00", "04:10", "04:15", "04:25", "04:30", "04:35", "04:40"]
+          spoken: ["4 AM", "4:10 AM", "4:15 AM", "4:25 AM", "4:30 AM", "4:35 AM", "4:40 AM"]
+          old_volume: "{{ state_attr(echo, 'volume_level') | float(0.4) }}"
+      - condition: template
+        value_template: "{{ echo != '' }}"
+      - action: media_player.volume_set
+        target: { entity_id: "{{ echo }}" }
+        data: { volume_level: 0 }
+      - repeat:
+          for_each: "{{ range(times | length) | list }}"
+          sequence:
+            # Skip alarms that already exist, so a manual re-run never doubles them.
+            - if:
+                - condition: template
+                  value_template: >-
+                    {{ (times[repeat.item] ~ ':00') not in (state_attr(alarm_sensor, 'sorted_active') | string) }}
+              then:
+                - action: media_player.play_media
+                  target: { entity_id: "{{ echo }}" }
+                  data:
+                    media_content_type: custom
+                    media_content_id: "set an alarm for {{ spoken[repeat.item] }}"
+                - delay: { seconds: 8 }
+      - delay: { seconds: 5 }
+      - action: media_player.volume_set
+        target: { entity_id: "{{ echo }}" }
+        data: { volume_level: "{{ old_volume }}" }
+
+  - id: jarvis_morning_music
+    alias: Morning music at 4:45 AM (Tue-Sat)
+    triggers:
+      - trigger: time
+        at: "04:45:00"
+    conditions:
+      - condition: time
+        weekday: [tue, wed, thu, fri, sat]
+    actions:
+      - variables:
+          echo: >-
+            {{ integration_entities('alexa_media') | select('match', 'media_player\.')
+               | select('is_state_attr', 'friendly_name', 'Master bedroom') | first | default('') }}
+      - action: media_player.play_media
+        target: { entity_id: "{{ echo }}" }
+        data:
+          media_content_type: custom
+          # Spotify's own picks for Jake; Jarvis can swap in its own list later.
+          media_content_id: "play my Discover Weekly on Spotify"

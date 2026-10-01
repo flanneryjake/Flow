@@ -33,7 +33,7 @@ echo "ok: alexa_media $(python3 -c "import json;print(json.load(open('$CFG/custo
 
 # 2. Package + config: packages folder, keep 120 days of history for routine learning.
 mkdir -p "$CFG/packages"
-cp "$HERE/packages/alexa.yaml" "$CFG/packages/alexa.yaml"
+cp "$HERE"/packages/*.yaml "$CFG/packages/"
 CONF="$CFG/configuration.yaml"
 cp "$CONF" "$CONF.bak-$(date +%Y%m%d-%H%M%S)"
 if ! grep -q 'packages: !include_dir_named packages' "$CONF"; then
