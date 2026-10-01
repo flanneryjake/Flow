@@ -1,0 +1,54 @@
+# Alexa package for Home Assistant (needs the Alexa Media Player custom integration signed in).
+# install-alexa.sh copies this to <HA config>/packages/alexa.yaml.
+
+script:
+  jarvis_say:
+    alias: Jarvis says something on the Echos
+    icon: mdi:account-voice
+    mode: queued
+    fields:
+      message:
+        description: What to say
+        example: Dinner's ready
+        required: true
+        selector: { text: {} }
+      echo:
+        description: One Echo media player, or leave empty for all of them
+        selector: { entity: { integration: alexa_media, domain: media_player } }
+      announce:
+        description: Announcement chime first
+        default: false
+        selector: { boolean: {} }
+    sequence:
+      - action: notify.alexa_media
+        data:
+          message: "{{ message }}"
+          target: >-
+            {{ [echo] if echo else (integration_entities('alexa_media')
+               | select('match', 'media_player\.') | list) }}
+          data:
+            type: "{{ 'announce' if announce else 'tts' }}"
+
+template:
+  - sensor:
+      - name: Alexa last heard
+        unique_id: jarvis_alexa_last_heard
+        icon: mdi:microphone-message
+        # Newest thing anyone said to any Echo, with which Echo heard it. Feeds the routine log.
+        state: >-
+          {% set ns = namespace(ts=0, text='nothing yet', echo='') %}
+          {% for e in integration_entities('alexa_media') | select('match', 'media_player\.') %}
+            {% set t = state_attr(e, 'last_called_timestamp') | int(0) %}
+            {% if t > ns.ts and state_attr(e, 'last_called_summary') %}
+              {% set ns.ts = t %}{% set ns.text = state_attr(e, 'last_called_summary') %}{% set ns.echo = e %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.text[:250] }}
+        attributes:
+          echo: >-
+            {% set ns = namespace(ts=0, echo='') %}
+            {% for e in integration_entities('alexa_media') | select('match', 'media_player\.') %}
+              {% set t = state_attr(e, 'last_called_timestamp') | int(0) %}
+              {% if t > ns.ts %}{% set ns.ts = t %}{% set ns.echo = e %}{% endif %}
+            {% endfor %}
+            {{ ns.echo }}
