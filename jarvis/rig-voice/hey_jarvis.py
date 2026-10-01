@@ -228,9 +228,15 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.say:
         return speak(a.say)
-    if not a.once:
-        serve()
-    run(once=a.once)
+    if a.once:
+        return run(once=True)
+    serve()
+    while True:                      # a mic or model error must never take the switch endpoint down with it
+        try:
+            run()
+        except Exception as e:  # noqa: BLE001
+            log(f"listener crashed: {e.__class__.__name__}: {e}; retrying in 15 s")
+            time.sleep(15)
 
 
 if __name__ == "__main__":
