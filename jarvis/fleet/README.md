@@ -59,7 +59,7 @@ After `install-ghq.ps1` (it sets `GITHUB_TASKS_TOKEN`), in a normal PowerShell w
 irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/fleet/install-fleet.ps1 | iex
 ```
 
-It saves the files to `C:\Jarvis\fleet`, updates `C:\Jarvis\ghq\ghq.py`, registers the hidden **Jarvis Fleet**
+It saves the files to `C:\Jarvis\fleet`, adds the Worker gate to this PC's own `C:\Jarvis\ghq\ghq.py` (keeping local changes, with a backup), registers the hidden **Jarvis Fleet**
 task (`fleet.py tick` every 2 minutes, log in `C:\Jarvis\logs\fleet.log`) and runs one tick. Every PC starts active.
 
 ### Phone app (homebase hub)
