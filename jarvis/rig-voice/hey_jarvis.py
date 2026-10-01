@@ -32,7 +32,7 @@ MIC = os.environ.get("JARVIS_MIC", "fifine")   # part of the input device's name
 LOG = os.path.join(HOME, "hey_jarvis.log")
 RATE = 16000
 FRAME = 1280                 # 80 ms, what openWakeWord expects
-WAKE_THRESHOLD = 0.5
+WAKE_THRESHOLD = float(os.environ.get("JARVIS_WAKE_THRESHOLD", "0.4"))
 SILENCE_RMS = 400            # int16 RMS below this counts as quiet
 END_SILENCE_S = 1.2
 MAX_REQUEST_S = 15
@@ -176,13 +176,21 @@ def run(once=False):
                             blocksize=int(FRAME * rate / RATE), callback=on_audio):
             got = []
             # Wait for "Hey Jarvis", or, inside the idea-mode window, for any speech at all.
+            peak_score, peak_rms, next_report = 0.0, 0.0, time.time() + 10
             while (once or state["listening"]) and not got:
                 chunk = frames.get()
+                if time.time() >= next_report:   # how well the mic hears: lets us tune gain/threshold
+                    if peak_rms >= SILENCE_RMS or peak_score >= 0.05:
+                        log(f"level: peak rms {peak_rms:.0f}, best wake score {peak_score:.2f}")
+                    peak_score, peak_rms, next_report = 0.0, 0.0, time.time() + 10
+                score = max(wake.predict(chunk).values())
+                peak_rms, peak_score = max(peak_rms, rms(chunk)), max(peak_score, score)
                 in_window = time.time() < follow_up_until
                 if in_window and rms(chunk) >= SILENCE_RMS:
                     got = [chunk]
-                elif max(wake.predict(chunk).values()) >= WAKE_THRESHOLD:
+                elif score >= WAKE_THRESHOLD:
                     got = [np.zeros(0, dtype=np.int16)]
+                    log(f"wake word ({score:.2f})")
                     wake.reset()
                 elif not in_window and follow_up_until:
                     follow_up_until = 0.0
