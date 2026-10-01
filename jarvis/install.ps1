@@ -1,7 +1,7 @@
 # Jarvis Always-On installer: run ONCE per machine (homebase first, then the rig).
 # In a normal (non-admin) PowerShell window on that machine, paste:
 #
-#   irm https://raw.githubusercontent.com/flanneryjake/Flow/main/jarvis/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/install.ps1 | iex
 #
 # What it does:
 #   - updates Claude Code and runs `claude remote-control` once in a visible window so you can answer the
@@ -12,7 +12,7 @@
 #   - homebase only: never sleep on AC power, lid close does nothing on AC
 
 $ErrorActionPreference = 'Stop'
-$base = 'https://raw.githubusercontent.com/flanneryjake/Flow/main/jarvis'
+$base = 'https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis'
 
 function Say([string]$m, [string]$c = 'Cyan') { Write-Host $m -ForegroundColor $c }
 $results = [ordered]@{}
@@ -21,9 +21,10 @@ $results = [ordered]@{}
 switch ($env:COMPUTERNAME.ToUpper()) {
     'DESKTOP-5VE3C77' { $machine = 'homebase' }
     'DESKTOP-VLLDDM4' { $machine = 'rig' }
+    'LAPTOP-4150EGRS' { $machine = 'laptop' }
     default {
-        $machine = (Read-Host "Is this 'homebase' or 'rig'? (computer name $env:COMPUTERNAME)").Trim().ToLower()
-        if ($machine -notin 'homebase', 'rig') { throw "Unknown machine '$machine'." }
+        $machine = (Read-Host "Is this 'homebase', 'rig' or 'laptop'? (computer name $env:COMPUTERNAME)").Trim().ToLower()
+        if ($machine -notin 'homebase', 'rig', 'laptop') { throw "Unknown machine '$machine'." }
     }
 }
 $workDir = if ($machine -eq 'homebase') { 'C:\Jarvis' } else { "$env:USERPROFILE\Desktop\Claude" }

@@ -54,7 +54,7 @@ Test without writing to Notion: `powershell -File C:\Jarvis\watchdog\watchdog.ps
 Install once per machine, in a normal PowerShell window at that machine:
 
 ```powershell
-irm https://raw.githubusercontent.com/flanneryjake/Flow/main/jarvis/install.ps1 | iex
+irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/install.ps1 | iex
 ```
 
 The one-time questions (trust the folder, enable Remote Control) have to be answered at the keyboard.
