@@ -117,8 +117,20 @@ def _has_heading_like(text, name):
     keys = _key_words(name)
     if not keys:
         return True
+    heads = _headings(text)
+    # "title" is the H1; "intro"/"overview" is the text right under it, heading or not.
+    if keys <= {'title', 'name'}:
+        return any(re.match(r'#\s', h) for h in heads) or bool(re.match(r'\s*\S', text))
+    if keys & {'intro', 'introduction', 'overview', 'opening'} and len(keys) <= 2:
+        body = re.split(r'^#\s.*$', text, maxsplit=1, flags=re.M)[-1]
+        first = next((ln.strip() for ln in body.splitlines() if ln.strip()), '')
+        if first and not first.startswith('#'):
+            return True
+
+    def hit(k, hk):   # same word, or one a prefix of the other ("intro"/"introduction", "worksheet"/"worksheets")
+        return any(k == w or (min(len(k), len(w)) >= 4 and (k.startswith(w) or w.startswith(k))) for w in hk)
     need = max(1, round(len(keys) * 0.6))   # 1 of 1-2 key words, 2 of 3-4, 3 of 5
-    return any(len(keys & _key_words(h)) >= need for h in _headings(text))
+    return any(sum(hit(k, _key_words(h)) for k in keys) >= need for h in heads)
 
 
 def include_sections(job_text):
@@ -206,6 +218,8 @@ TO_CLAUDE = re.compile(
     r'e-mail|text (him|her|them|my)|message (him|her|them)|send (it|this|a|an|the) |delete|password|api key|'
     r'merge|git push|install|download|search (the web|online|for)|look up|google|'
     r'news|weather|price|website|log ?in|sign in|on the (homebase|rig) pc)\b', re.I)
+STATUS = re.compile(r"^\s*(is|are|was|what'?s|how'?s|whats|hows|status|any)\b.{0,60}\b(on|up|down|awake|asleep|running|"
+                    r"online|offline|status|doing|working|busy|queued|waiting|left)\b", re.I)
 TO_RIG = re.compile(
     r'\b(curriculum|facilitator guide|handout|study guide|cover letter|resume|r[eé]sum[eé]|seo|product (copy|'
     r'description)|lesson plan|essay|paper|report|write (a|an|the|me) (\w+ ){0,3}(guide|plan|script|program|app|'
@@ -233,6 +247,8 @@ def route_request(text, context=''):
         route, why, handoff = 'claude', 'Needs web, accounts or an outside action.', handoff or t
     elif route == 'laptop' and TO_RIG.search(t):
         route, why, handoff = 'rig', 'Long-form or code; rig work.', handoff or t
+    elif route != 'laptop' and context and STATUS.search(t) and not TO_RIG.search(t):
+        route, why, handoff = 'laptop', 'Status question, answered from the state given.', ''
     answer = ''
     if route == 'laptop':
         # Answer in the normal Baby Jarvis voice (the Modelfile's own system prompt).
