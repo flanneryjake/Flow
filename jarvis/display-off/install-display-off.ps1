@@ -35,7 +35,10 @@ $at = if ($env:JARVIS_DISPLAY_OFF_AT) { $env:JARVIS_DISPLAY_OFF_AT } else { '23:
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
 $ps1 = Join-Path $dir 'displays-off.ps1'
-Set-Content -Path $ps1 -Encoding ASCII -Value @'
+# A machine with blackout.ps1 (the Modern Standby laptop) has its own hand-patched displays-off.ps1; keep it.
+$keepLocal = Test-Path (Join-Path $dir 'blackout.ps1')
+if ($keepLocal) { Write-Host "kept the local $ps1 (blackout.ps1 present)" -ForegroundColor Yellow }
+else { Set-Content -Path $ps1 -Encoding ASCII -Value @'
 # Turns all monitors off (they wake on mouse/keyboard). Written by install-display-off.ps1.
 # -IfIdleMinutes N: only if there was no mouse/keyboard input for N minutes.
 param([int]$IfIdleMinutes = 0)
@@ -63,6 +66,7 @@ if ($avail -match 'S0 Low Power Idle') {
 $ok = [Jarvis.Monitor]::PostMessage([IntPtr]0xFFFF, 0x0112, [IntPtr]0xF170, [IntPtr]2)
 Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss}  displays off  posted={1}  idle={2}min" -f (Get-Date), $ok, $idleMin)
 '@
+}
 
 # One launcher per task; the .vbs passes its own arguments on to displays-off.ps1.
 function Write-Launcher([string]$path, [string]$psArgs) {
