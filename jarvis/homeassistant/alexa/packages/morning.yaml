@@ -26,12 +26,17 @@ automation:
           alarm_sensor: "{{ echo | replace('media_player.', 'sensor.') ~ '_next_alarm' }}"
           times: ["04:00", "04:10", "04:15", "04:25", "04:30", "04:35", "04:40"]
           spoken: ["4 AM", "4:10 AM", "4:15 AM", "4:25 AM", "4:30 AM", "4:35 AM", "4:40 AM"]
-          old_volume: "{{ state_attr(echo, 'volume_level') | float(0.4) }}"
+          # Amazon doesn't always report volume; then skip muting rather than restore a guessed level.
+          old_volume: "{{ state_attr(echo, 'volume_level') }}"
       - condition: template
         value_template: "{{ echo != '' }}"
-      - action: media_player.volume_set
-        target: { entity_id: "{{ echo }}" }
-        data: { volume_level: 0 }
+      - if:
+          - condition: template
+            value_template: "{{ old_volume is number }}"
+        then:
+          - action: media_player.volume_set
+            target: { entity_id: "{{ echo }}" }
+            data: { volume_level: 0 }
       - repeat:
           for_each: "{{ range(times | length) | list }}"
           sequence:
@@ -48,9 +53,13 @@ automation:
                     media_content_id: "set an alarm for {{ spoken[repeat.item] }}"
                 - delay: { seconds: 8 }
       - delay: { seconds: 5 }
-      - action: media_player.volume_set
-        target: { entity_id: "{{ echo }}" }
-        data: { volume_level: "{{ old_volume }}" }
+      - if:
+          - condition: template
+            value_template: "{{ old_volume is number }}"
+        then:
+          - action: media_player.volume_set
+            target: { entity_id: "{{ echo }}" }
+            data: { volume_level: "{{ old_volume }}" }
       - delay: { seconds: 2 }
       - action: notify.alexa_media
         data:

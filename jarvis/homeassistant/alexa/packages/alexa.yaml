@@ -59,8 +59,8 @@ template:
             {% endfor %}
             {{ ns.echo }}
           ts: >-
-            {{ integration_entities('alexa_media') | select('match', 'media_player\.')
-               | map('state_attr', 'last_called_timestamp') | map('int', 0) | max(default=0) }}
+            {{ (integration_entities('alexa_media') | select('match', 'media_player\.')
+               | map('state_attr', 'last_called_timestamp') | map('int', 0) | list + [0]) | max }}
 
 # --- "Alexa, Jarvis ..." -> TARS on the laptop -> answer spoken on the same Echo -------------------
 rest_command:
