@@ -89,6 +89,38 @@ def _has_section(text, name):
     return bool(pat.search(text))
 
 
+STOP = {'the', 'and', 'for', 'with', 'this', 'that', 'what', 'about', 'from', 'into', 'your', 'you', 'are', 'its',
+        'each', 'any', 'all', 'one', 'two', 'three', 'per', 'sentences', 'sentence', 'words', 'word', 'bullets',
+        'bullet', 'lines', 'line', 'short', 'brief', 'section', 'include', 'list', 'plus'}
+
+
+def _key_words(s):
+    s = re.sub(r'\([^)]*\)|\[[^\]]*\]', ' ', s)          # drop "(2-3 sentences)" style asides
+    return {w for w in re.findall(r'[a-z][a-z0-9]+', s.lower()) if len(w) > 2 and w not in STOP}
+
+
+def _headings(text):
+    out = []
+    for ln in text.splitlines():
+        t = ln.strip()
+        if re.match(r'#{1,6}\s', t) or re.match(r'\*\*[^*]{2,80}\*\*:?$', t) or re.match(r'\d+[.)]\s+\S', t) \
+                or (t.endswith(':') and len(t) < 80) or (t.isupper() and 3 < len(t) < 80):
+            out.append(t)
+    return out
+
+
+def _has_heading_like(text, name):
+    """An Include: part counts as present when a heading carries most of its key words, so
+    "What this session is about (2-3 sentences)" matches "## What This Session Is About"."""
+    if _has_section(text, name):
+        return True
+    keys = _key_words(name)
+    if not keys:
+        return True
+    need = max(1, round(len(keys) * 0.6))   # 1 of 1-2 key words, 2 of 3-4, 3 of 5
+    return any(len(keys & _key_words(h)) >= need for h in _headings(text))
+
+
 def include_sections(job_text):
     """Section names from every "Include: A, B and C." in a job prompt, wherever it sits (homebase's rig prompts
     put it mid-sentence). Each list runs to the end of its sentence or line."""
@@ -118,7 +150,7 @@ def check_rig_output(text, title='', required_sections=(), crisis_line=True, min
     warn_sections = list(warn_sections) + [s for s in include_sections(job_prompt) if s not in warn_sections]
     if require_rig_notes and not re.search(r'RIG-NOTES', text):
         problems.append('no RIG-NOTES block')
-    wmiss = [s for s in warn_sections if s.strip() and not _has_section(text, s)]
+    wmiss = [s for s in warn_sections if s.strip() and not _has_heading_like(text, s)]
     if wmiss:
         warnings.append('Include: sections not found as headings: ' + ', '.join(wmiss))
     words = len(text.split())

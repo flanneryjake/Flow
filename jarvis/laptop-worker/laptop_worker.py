@@ -23,6 +23,7 @@ Run: pythonw laptop_worker.py            (normal, started by laptop_watchdog.py)
      python laptop_worker.py --dry-run   (show what it would claim, change nothing)
 """
 import argparse
+import ctypes
 import datetime as dt
 import http.server
 import json
@@ -152,6 +153,14 @@ def save_state(st):
     os.makedirs(BASE, exist_ok=True)
     with open(STATE, 'w', encoding='utf-8') as f:
         json.dump(st, f, indent=1)
+
+
+def stay_awake(on):
+    """The laptop sleeps after 30 min without input; hold it awake while a card runs (ES_CONTINUOUS|ES_SYSTEM_REQUIRED)."""
+    try:
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | (0x00000001 if on else 0))
+    except Exception:
+        pass
 
 
 def stamp():
@@ -344,6 +353,7 @@ def run_card(page, st, dry):
         log(f'lost the claim on "{title}", skipping')
         return
     heartbeat(f'Working: {title[:80]}')
+    stay_awake(True)
     log(f'claimed "{title}"')
     started = time.time()
     task_log = os.path.join(LOG_DIR, f'task-{pid[:8]}.log')
@@ -404,6 +414,7 @@ def run_card(page, st, dry):
         except Exception as e2:
             log(f'could not release "{title}": {e2}')
     finally:
+        stay_awake(False)
         save_state(st)
 
 
