@@ -293,7 +293,14 @@ def ask_model(card_text):
     m = re.search(r'\{.*\}', raw, re.S)
     if not m:
         raise ValueError(f'model gave no JSON: {raw[:200]!r}')
-    ans = json.loads(m.group(0))
+    try:
+        ans = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        if resp.get('done_reason') == 'length' or (resp.get('eval_count') or 0) >= body['options']['num_predict'] - 5:
+            # Ran out of room mid-answer: the job is bigger than the laptop, not a failure.
+            return {'route': 'rig', 'why': "answer ran past the laptop's output limit", 'result': '', 'handoff': '',
+                    'seconds': round(time.time() - t0, 1), 'tokens_out': resp.get('eval_count')}
+        raise
     if ans.get('route') not in ('laptop', 'rig', 'claude'):
         raise ValueError(f'bad route {ans.get("route")!r}')
     ans['seconds'] = round(time.time() - t0, 1)
@@ -318,7 +325,9 @@ def pre_route(title, notes, body, approval_code):
     if est_tokens(text) > MAX_IN_TOKENS:
         return 'rig', f'input is ~{est_tokens(text)} tokens, over the laptop\'s ~{MAX_IN_TOKENS}'
     m = RIG_WORDS.search(title)
-    if m:
+    # Only when the card asks to make one ("write the B12 facilitator guide"), not when it merely names one
+    # ("tag these files as curriculum or handout").
+    if m and re.search(r'\b(write|draft|create|make|build|generate|produce|rewrite|expand)\b', title, re.I):
         return 'rig', f'rig-class job ("{m.group(0)}")'
     return None, None
 
@@ -336,6 +345,34 @@ def handoff(page, route, why, note):
         'Notes': {'rich_text': rt(new_notes)},
         'Agent log': {'rich_text': rt(f'{stamp()} escalated to {target}: {why}')},
     })
+
+
+def decide(title, notes, body, pin, task_log):
+    """Rule check, then Baby Jarvis. Returns (route, why, answer-or-None) and writes the task log."""
+    route, why = pre_route(title, notes, body, pin)
+    ans = None
+    if route is None:
+        card = f'TASK: {title}\n' + (f'NOTES: {notes}\n' if notes else '') + (f'DETAILS:\n{body}\n' if body else '')
+        ans = ask_model(card)
+        route, why = ans['route'], ans.get('why', '').strip()
+        if route == 'laptop':
+            result = (ans.get('result') or '').strip()
+            if not result:
+                route, why = 'rig', 'Baby Jarvis returned an empty result'
+            elif len(result.split()) > MAX_OUT_WORDS:
+                route, why = 'rig', f'answer ran {len(result.split())} words, too long for a laptop job'
+    with open(task_log, 'w', encoding='utf-8') as f:
+        f.write(json.dumps({'title': title, 'route': route, 'why': why, 'answer': ans}, indent=1))
+    return route, why, ans
+
+
+def save_output(title, key, result):
+    os.makedirs(OUT_DIR, exist_ok=True)
+    slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:50] or 'card'
+    out = os.path.join(OUT_DIR, f'{dt.date.today():%Y%m%d}-{slug}-{str(key)[:6]}.md')
+    with open(out, 'w', encoding='utf-8') as f:
+        f.write(f'# {title}\n\n{result.strip()}\n')
+    return out
 
 
 def run_card(page, st, dry):
@@ -359,26 +396,9 @@ def run_card(page, st, dry):
     task_log = os.path.join(LOG_DIR, f'task-{pid[:8]}.log')
     try:
         body = page_body(pid)
-        route, why = pre_route(title, notes, body, code)
-        ans = None
-        if route is None:
-            card = f'TASK: {title}\n' + (f'NOTES: {notes}\n' if notes else '') + (f'DETAILS:\n{body}\n' if body else '')
-            ans = ask_model(card)
-            route, why = ans['route'], ans.get('why', '').strip()
-            if route == 'laptop':
-                result = (ans.get('result') or '').strip()
-                if not result:
-                    route, why = 'rig', 'Baby Jarvis returned an empty result'
-                elif len(result.split()) > MAX_OUT_WORDS:
-                    route, why = 'rig', f'answer ran {len(result.split())} words, too long for a laptop job'
-        with open(task_log, 'w', encoding='utf-8') as f:
-            f.write(json.dumps({'title': title, 'route': route, 'why': why, 'answer': ans}, indent=1))
+        route, why, ans = decide(title, notes, body, code, task_log)
         if route == 'laptop':
-            os.makedirs(OUT_DIR, exist_ok=True)
-            slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:50] or 'card'
-            out = os.path.join(OUT_DIR, f'{dt.date.today():%Y%m%d}-{slug}-{pid[:6]}.md')
-            with open(out, 'w', encoding='utf-8') as f:
-                f.write(f'# {title}\n\n{ans["result"].strip()}\n')
+            out = save_output(title, pid, ans['result'])
             append_blocks(pid, f'Baby Jarvis result ({stamp()})', ans['result'])
             update(pid, {'Status': {'select': {'name': 'Done'}},
                          'Agent log': {'rich_text': rt(f'{stamp()} done on Baby Jarvis in {ans["seconds"]}s. '
@@ -465,21 +485,97 @@ def start_server():
     return True
 
 
-def one_pass(st, dry=False):
-    if not notion_token():
-        heartbeat('IDLE-REASON: no-token NOTION_TOKEN is not set for this user')
+# ----------------------------------------------------------------------------- GitHub queue (ghq)
+# The board is moving to GitHub Issues in flanneryjake/jarvis-tasks (Flow jarvis/ghq). JARVIS_QUEUE picks the
+# source: notion, github, or both (default, while cards live on both boards during the cutover). On GitHub the laptop takes only open
+# status:approved issues labelled machine:laptop; a "pin" label counts like an Approval code.
+
+def _ghq():
+    if r'C:\Jarvis\ghq' not in sys.path:
+        sys.path.insert(0, r'C:\Jarvis\ghq')
+    if not os.environ.get('GITHUB_TASKS_TOKEN'):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as k:
+                os.environ['GITHUB_TASKS_TOKEN'] = winreg.QueryValueEx(k, 'GITHUB_TASKS_TOKEN')[0]
+        except OSError:
+            pass
+    import ghq
+    return ghq
+
+
+def gh_ready():
+    g = _ghq()
+    return [c for c in g.ready(MACHINE, use_etag_file=os.path.join(BASE, 'ghq-ready-cache.json'))
+            if f'machine:{MACHINE}' in c['labels']]
+
+
+def gh_run_card(card, st, dry):
+    g = _ghq()
+    n, title = card['number'], card['title']
+    key = f'gh{n}'
+    if dry:
+        log(f'dry run: would claim GitHub #{n} "{title}"')
         return
+    if not g.claim(n, MACHINE):
+        log(f'lost the claim on GitHub #{n}, skipping')
+        return
+    heartbeat(f'Working: #{n} {title[:80]}')
+    stay_awake(True)
+    log(f'claimed GitHub #{n} "{title}"')
+    started = g.now_iso()
+    try:
+        issue = g.api('GET', g.repo_path(f'/issues/{n}'))
+        body = re.sub(r'<!--.*?-->', '', issue.get('body') or '', flags=re.S).strip()[:16000]
+        route, why, ans = decide(title, '', body, 'pin' in card['labels'], os.path.join(LOG_DIR, f'task-{key}.log'))
+        if route == 'laptop':
+            out = save_output(title, key, ans['result'])
+            g.log_run(n, MACHINE, 'done', started=started, model=MODEL,
+                      summary=f"{ans['result'].strip()}\n\n_Done on Baby Jarvis in {ans['seconds']}s; also saved to {out}._")
+            log(f'done GitHub #{n} -> {out}')
+        else:
+            target = 'rig' if route == 'rig' else 'any'
+            note = (ans or {}).get('handoff', '')
+            g.log_run(n, MACHINE, 'released', started=started, model=MODEL,
+                      summary=f'Laptop handoff to {"the rig" if route == "rig" else "Claude"}: {why}' +
+                              (f'\n\n{note}' if note else ''))
+            g.set_status(n, 'approved', extra_add=[f'machine:{target}'], extra_remove=[f'machine:{MACHINE}'])
+            log(f'escalated GitHub #{n} to {target}: {why}')
+        record(title, '', body, route, why, ans)
+    except Exception as e:
+        err = f'{type(e).__name__}: {e}'
+        log(f'failed GitHub #{n} "{title}": {err}')
+        try:
+            if g.log_run(n, MACHINE, 'failed', started=started, summary=err[:1500]) == 'needs-jake':
+                log(f'needs Jake: GitHub #{n} "{title}" failed twice on the laptop')
+        except Exception as e2:
+            log(f'could not release GitHub #{n}: {e2}')
+    finally:
+        stay_awake(False)
+
+
+QUEUE = os.environ.get('JARVIS_QUEUE', 'both').lower()
+
+
+def one_pass(st, dry=False):
     if not ollama_up():
         heartbeat(f'IDLE-REASON: ollama-down {MODEL} not reachable at {OLLAMA}')
         log(f'Ollama/{MODEL} not reachable; waiting (the watchdog restarts Ollama)')
         return
-    cards = ready_cards()
-    if not cards:
-        heartbeat('IDLE-REASON: no-cards nothing approved for the laptop')
-        return
-    for page in cards:
-        run_card(page, st, dry)
-    heartbeat('IDLE-REASON: no-cards queue done')
+    ran = False
+    if QUEUE in ('notion', 'both'):
+        if not notion_token():
+            if QUEUE == 'notion':
+                heartbeat('IDLE-REASON: no-token NOTION_TOKEN is not set for this user')
+                return
+        else:
+            for page in ready_cards():
+                run_card(page, st, dry)
+                ran = True
+    if QUEUE in ('github', 'both'):
+        for card in gh_ready():
+            gh_run_card(card, st, dry)
+            ran = True
+    heartbeat('IDLE-REASON: no-cards ' + ('queue done' if ran else 'nothing approved for the laptop'))
 
 
 def main():

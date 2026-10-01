@@ -69,6 +69,20 @@ ROUTES = [  # (request, acceptable routes)
     ('look up the new 42 CFR part 2 rules', {'claude'}),
 ]
 
+MATH = [  # (question, exact result)
+    ("What's 15 percent of 80?", '12'),
+    ('what is 12.5% of 240', '30'),
+    ('37 is what percent of 148', '25%'),
+    ('a 20% tip on $64.50', '$12.90 (total $77.40)'),
+    ('what is 17 times 23', '391'),
+    ('(12+8)/5', '4'),
+    ('how much is 1,250 minus 375', '875'),
+]
+FRONT_HA = [  # (request, expected route, has an HA call)
+    ('turn off the kitchen lights', 'laptop', True),
+    ('turn off the lights at 9', 'claude', False),
+]
+
 HA = [  # (utterance, expect_ok, expected service)
     ('turn off the living room lights', True, 'light.turn_off'),
     ('kitchen lights on', True, 'light.turn_on'),
@@ -105,6 +119,20 @@ def main():
         ok += good
         print(('OK ' if good else 'BAD'), r['route'], f"{r['model']}s", '|', text, '|', (r['answer'] or r['why'])[:110].replace('\n', ' '))
     score['route'] = f'{ok}/{len(ROUTES)}'
+    print('== math')
+    ok = 0
+    for q, exp in MATH:
+        r = b.route_request(q)
+        first = exp.split(' ')[0]
+        good = r['route'] == 'laptop' and r.get('result') == exp and first in r['answer']
+        ok += good
+        print(('OK ' if good else 'BAD'), q, '|', r.get('result'), '|', r['answer'])
+    for q, route, has in FRONT_HA:
+        r = b.route_request(q)
+        good = r['route'] == route and bool((r.get('ha') or {}).get('ok')) == has
+        ok += good
+        print(('OK ' if good else 'BAD'), q, '|', r['route'], json.dumps((r.get('ha') or {}).get('call')))
+    score['math+ha-front'] = f'{ok}/{len(MATH) + len(FRONT_HA)}'
     print('== ha_intent')
     ok = 0
     for text, exp, svc in HA:

@@ -25,7 +25,9 @@ CLI:
   python baby_skills.py ha "set the bedroom to 68" --entities entities.json
 """
 import argparse
+import ast
 import json
+import operator
 import os
 import re
 import sys
@@ -90,8 +92,11 @@ def _has_section(text, name):
 
 
 STOP = {'the', 'and', 'for', 'with', 'this', 'that', 'what', 'about', 'from', 'into', 'your', 'you', 'are', 'its',
-        'each', 'any', 'all', 'one', 'two', 'three', 'per', 'sentences', 'sentence', 'words', 'word', 'bullets',
-        'bullet', 'lines', 'line', 'short', 'brief', 'section', 'include', 'list', 'plus'}
+        'each', 'any', 'all', 'one', 'two', 'three', 'four', 'five', 'per', 'sentences', 'sentence', 'words', 'word',
+        'bullets', 'bullet', 'lines', 'line', 'short', 'brief', 'section', 'include', 'list', 'plus', 'least', 'box',
+        'plain', 'language', 'step', 'tied', 'used', 'option', 'suggested', 'wording', 'quotes', 'adds', 'session',
+        'length', 'own'}
+QUALIFIER = re.compile(r'\s(?:with|as|for|that|tied to|which|where|using|in)\s.*$', re.I)
 
 
 def _key_words(s):
@@ -99,48 +104,108 @@ def _key_words(s):
     return {w for w in re.findall(r'[a-z][a-z0-9]+', s.lower()) if len(w) > 2 and w not in STOP}
 
 
+def _clean_part(p):
+    """'3 plain-language goals' -> 'plain-language goals'; 'a WORKSHEET section ...' -> 'WORKSHEET section ...'."""
+    p = re.sub(r'^\s*(?:and\s+|or\s+)?(?:\d+|a|an|the|one|two|three|four|five|some)\s+', '', p.strip(), flags=re.I)
+    return p.strip(' .:;')
+
+
 def _headings(text):
     out = []
     for ln in text.splitlines():
         t = ln.strip()
-        if re.match(r'#{1,6}\s', t) or re.match(r'\*\*[^*]{2,80}\*\*:?$', t) or re.match(r'\d+[.)]\s+\S', t) \
-                or (t.endswith(':') and len(t) < 80) or (t.isupper() and 3 < len(t) < 80):
+        if re.match(r'#{1,6}\s', t) or re.match(r'\d+[.)]\s+\S', t) or (t.endswith(':') and len(t) < 80) \
+                or (t.isupper() and 3 < len(t) < 80):
             out.append(t)
+        else:
+            m = re.match(r'\*\*([^*]{2,80})\*\*', t)    # "**Goals for this session**", "**Title:** Stress, ..."
+            if m:
+                out.append(m.group(1))
     return out
 
 
+def _hit(k, hk):   # same word, or one a prefix of the other ("intro"/"introduction", "worksheet"/"worksheets")
+    return any(k == w or (min(len(k), len(w)) >= 4 and (k.startswith(w) or w.startswith(k))) for w in hk)
+
+
 def _has_heading_like(text, name):
-    """An Include: part counts as present when a heading carries most of its key words, so
-    "What this session is about (2-3 sentences)" matches "## What This Session Is About"."""
-    if _has_section(text, name):
+    """An Include: part counts as present when:
+      * a heading carries most of its key words ("What this session is about (2-3 sentences)" ->
+        "**What this session is about**"), or
+      * a heading carries its head noun, the last key word before any "with/as/for/tied to" qualifier
+        ("3 plain-language goals" -> "**Goals for this session**", "a WORKSHEET section with ..." -> "### WORKSHEET"), or
+      * every quoted phrase in it appears in the text ("a footer with 'If you are in crisis: call or text 988 ...'").
+    "title" is satisfied by the H1 or a "Title:" line; "intro"/"overview" by the text right under the H1."""
+    name = _clean_part(name)
+    if not name or _has_section(text, name):
+        return True
+    flat = re.sub(r'\s+', ' ', text.lower())
+    # Quotes, not apostrophes: "'This week's practice'" and "'Handling difficult moments' (... doesn't ...)".
+    quoted = [a or b for a, b in re.findall(r"(?<![A-Za-z])'(.{6,}?)'(?![A-Za-z])|\"([^\"]{6,})\"", name)]
+    quoted = [q.split('<')[0].strip() for q in quoted]          # "Adapted from <source> ..." -> "Adapted from"
+    quoted = [q for q in quoted if len(q) >= 6]
+    if quoted and all(re.sub(r'\s+', ' ', q.lower())[:40] in flat for q in quoted):
         return True
     keys = _key_words(name)
     if not keys:
         return True
     heads = _headings(text)
-    # "title" is the H1; "intro"/"overview" is the text right under it, heading or not.
     if keys <= {'title', 'name'}:
-        return any(re.match(r'#\s', h) for h in heads) or bool(re.match(r'\s*\S', text))
+        return any(re.match(r'#\s', h) or h.lower().startswith('title') for h in heads)
     if keys & {'intro', 'introduction', 'overview', 'opening'} and len(keys) <= 2:
         body = re.split(r'^#\s.*$', text, maxsplit=1, flags=re.M)[-1]
         first = next((ln.strip() for ln in body.splitlines() if ln.strip()), '')
         if first and not first.startswith('#'):
             return True
-
-    def hit(k, hk):   # same word, or one a prefix of the other ("intro"/"introduction", "worksheet"/"worksheets")
-        return any(k == w or (min(len(k), len(w)) >= 4 and (k.startswith(w) or w.startswith(k))) for w in hk)
+    head_keys = [_key_words(h) for h in heads]
     need = max(1, round(len(keys) * 0.6))   # 1 of 1-2 key words, 2 of 3-4, 3 of 5
-    return any(sum(hit(k, _key_words(h)) for k in keys) >= need for h in heads)
+    if any(sum(_hit(k, hk) for k in keys) >= need for hk in head_keys):
+        return True
+    core = [w for w in re.findall(r'[a-z][a-z0-9]+', QUALIFIER.sub('', re.sub(r'\([^)]*\)', ' ', name)).lower())
+            if len(w) > 2 and w not in STOP]
+    return bool(core) and any(_hit(core[-1], hk) for hk in head_keys)
+
+
+def _split_top(s, seps):
+    """Split on any of seps where they are not inside quotes or parentheses. An apostrophe between two
+    letters (week's, doesn't) is not a quote."""
+    out, buf, depth, quote, i = [], '', 0, None, 0
+    while i < len(s):
+        c = s[i]
+        apostrophe = c == "'" and s[i - 1:i].isalpha() and s[i + 1:i + 2].isalpha()
+        if quote:
+            if c == quote and not apostrophe:
+                quote = None
+        elif c in '\'"' and not apostrophe:
+            quote = c
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            sep = next((x for x in seps if s.startswith(x, i)), None)
+            if sep:
+                out.append(buf)
+                buf, i = '', i + len(sep)
+                continue
+        buf += c
+        i += 1
+    out.append(buf)
+    return out
 
 
 def include_sections(job_text):
-    """Section names from every "Include: A, B and C." in a job prompt, wherever it sits (homebase's rig prompts
-    put it mid-sentence). Each list runs to the end of its sentence or line."""
+    """Section names from every "Include: ..." in a job prompt, wherever it sits (homebase's rig prompts put it
+    mid-sentence). A list runs to the first sentence end outside quotes and parentheses. It is split on ";" when
+    it uses them, else on "," and " and ", never inside quotes or parentheses."""
     names = []
-    for m in re.finditer(r'\bInclude:\s*([^\n]+?)(?:\.(?=\s|$)|\n|$)', job_text or '', re.I):
-        for p in re.split(r',|;|\band\b', m.group(1)):
-            p = p.strip(' .:"\'')
-            if p and p.lower() not in (n.lower() for n in names):
+    for m in re.finditer(r'\bInclude:\s*', job_text or '', re.I):
+        seg = _split_top(job_text[m.end():], ['. ', '.\n', '\n\n'])[0]
+        semi = _split_top(seg, ['; ', ';'])
+        parts = semi if len(semi) > 1 else [q for p in _split_top(seg, [', ']) for q in _split_top(p, [' and '])]
+        for p in parts:
+            p = _clean_part(p)
+            if p and len(p) < 400 and p.lower() not in (n.lower() for n in names):
                 names.append(p)
     return names
 
@@ -227,11 +292,106 @@ TO_RIG = re.compile(
     r'assessment|\d[\d,]{2,}[- ]?words?|\d+[- ]?pages?|long[- ]form)\b', re.I)
 
 
+# ----------------------------------------------------------------------------- math (front door)
+# The 9B gets arithmetic wrong ("15 percent of 80" -> "Twelve point eight"), so simple math is computed here
+# with a small AST walker (no eval) and Baby Jarvis only phrases the number. Its line is used only if it
+# contains the exact result; otherwise a plain template answers.
+
+_WORDS = [(r'\bmultiplied by\b|\btimes\b|\bx\b(?=\s*[\d(])', '*'), (r'\bdivided by\b|\bover\b', '/'),
+          (r'\bplus\b|\badded to\b', '+'), (r'\bminus\b|\bless\b', '-'), (r'\bsquared\b', '**2'),
+          (r'\bto the power of\b', '**')]
+_OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
+        ast.Pow: operator.pow, ast.Mod: operator.mod, ast.USub: operator.neg, ast.UAdd: operator.pos}
+
+
+def _safe_eval(expr):
+    def ev(n):
+        if isinstance(n, ast.Expression):
+            return ev(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            return n.value
+        if isinstance(n, ast.BinOp) and type(n.op) in _OPS:
+            a, b = ev(n.left), ev(n.right)
+            if isinstance(n.op, ast.Pow) and abs(b) > 12:
+                raise ValueError('exponent too large')
+            return _OPS[type(n.op)](a, b)
+        if isinstance(n, ast.UnaryOp) and type(n.op) in _OPS:
+            return _OPS[type(n.op)](ev(n.operand))
+        raise ValueError('not simple arithmetic')
+    return ev(ast.parse(expr, mode='eval'))
+
+
+def _fmt(x):
+    if isinstance(x, float):
+        x = round(x, 4)
+        if x == int(x):
+            x = int(x)
+    return f'{x:,}' if isinstance(x, int) else f'{x:,.4f}'.rstrip('0').rstrip('.')
+
+
+def solve_math(text):
+    """Returns (expression shown, result string) for a simple arithmetic or percent question, else None."""
+    t = text.lower().replace(',', '').strip().rstrip('?.! ')
+    t = re.sub(r"^(hey jarvis,?\s*)?(what'?s|what is|whats|calculate|compute|how much is|work out)\s+", '', t)
+    m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)\s+of\s+\$?(\d+(?:\.\d+)?)', t)
+    if m:
+        p, n = float(m.group(1)), float(m.group(2))
+        return f'{_fmt(p)}% of {_fmt(n)}', _fmt(p * n / 100)
+    m = re.fullmatch(r'\$?(\d+(?:\.\d+)?)\s+is what (?:percent|%) of\s+\$?(\d+(?:\.\d+)?)', t)
+    if m and float(m.group(2)):
+        return f'{m.group(1)} as a percent of {m.group(2)}', _fmt(float(m.group(1)) / float(m.group(2)) * 100) + '%'
+    m = re.fullmatch(r'(?:a\s+)?(\d+(?:\.\d+)?)\s*(?:%|percent)\s+tip on\s+\$?(\d+(?:\.\d+)?)', t)
+    if m:
+        tip = float(m.group(1)) * float(m.group(2)) / 100
+        return f'{m.group(1)}% tip on ${m.group(2)}', f'${tip:,.2f} (total ${tip + float(m.group(2)):,.2f})'
+    expr = t.replace('$', '')
+    for pat, rep in _WORDS:
+        expr = re.sub(pat, rep, expr)
+    expr = expr.replace('^', '**').replace('×', '*').replace('÷', '/')
+    if not re.fullmatch(r'[\d\s.+\-*/%()]+', expr) or not re.search(r'\d\s*(\*\*|[+\-*/%])\s*[\d(]', expr):
+        return None
+    try:
+        val = _safe_eval(expr.strip())
+    except (ValueError, SyntaxError, ZeroDivisionError, OverflowError, TypeError):
+        return None
+    return re.sub(r'\s+', ' ', expr.strip()), _fmt(val)
+
+
+def _math_answer(text, solved):
+    shown, result = solved
+    out, secs = _chat(f"Jake asked: {text}\nThe exact answer, already computed, is {result}. Reply in one short "
+                      f"sentence that states {result} exactly as written. Do not redo the math.", system=None,
+                      max_tokens=60)
+    line = out.splitlines()[0].strip() if out else ''
+    if result.split(' ')[0] not in line:
+        line = f'{shown} = {result}.'
+    return line, secs if out else None
+
+
+HA_CMD = re.compile(r'\b(turn|switch|dim|brighten|set|put)\b.{0,40}\b(lights?|lamps?|thermostat|heat|ac|air|'
+                    r'temperature|degrees)\b|\b(lights?|lamps?)\s+(on|off)\b', re.I)
+HA_LATER = re.compile(r'\b(at \d|in \d+ ?(min|minutes|hours?)|tonight|tomorrow|every|schedule|when|after|before|until)\b',
+                      re.I)
+
+
 def route_request(text, context=''):
     """Returns {"route": laptop|rig|claude, "why", "handoff", "answer", "model"}. "answer" is set only for laptop.
     context: optional current state for status questions (e.g. the Machine Health snapshot lines, Worker queue),
-    so "is the rig on" is answered on the laptop from what the caller knows."""
+    so "is the rig on" is answered on the laptop from what the caller knows. Simple arithmetic and percent
+    questions are computed in code (solve_math) and the answer carries the exact result."""
     t = text.strip()
+    if HA_CMD.search(t):
+        if HA_LATER.search(t):
+            return {'route': 'claude', 'why': 'A scheduled or conditional home action needs an HA automation.',
+                    'handoff': t, 'answer': '', 'model': None}
+        r = ha_intent(t)
+        return {'route': 'laptop', 'why': 'Home Assistant command.', 'handoff': '', 'ha': r, 'model': r['model'],
+                'answer': '' if r['ok'] else f"I can't do that one by voice: {r['why']}"}
+    solved = solve_math(t)
+    if solved:
+        line, secs = _math_answer(t, solved)
+        return {'route': 'laptop', 'why': 'Arithmetic, computed in code.', 'handoff': '', 'answer': line,
+                'result': solved[1], 'model': secs}
     ctx = f"Current state you can answer status questions from:\n{context.strip()[:2500]}\n" if context else ''
     if len(t) / 3.5 > 3000:
         return {'route': 'rig', 'why': 'Too long for the laptop.', 'handoff': t[:300], 'answer': '', 'model': None}
