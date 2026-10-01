@@ -1,14 +1,18 @@
 # Rig mic "Hey Jarvis" (jarvis/rig-voice/hey_jarvis.py), stopgap until the room speaker exists.
 # - HA pushes the "Jarvis listening" switch to the rig listener; the mic is closed while it's off.
 # - The rig hands Jarvis's replies back here and HA says them on the Echo in that room.
-# secrets.yaml needs: rig_voice_listening_url: "http://<rig tailnet IP>:8796/listening"
+# secrets.yaml needs (random id, made once on homebase; the rig learns the say URL from HA's push):
+#   rig_voice_listening_url: "http://<rig tailnet IP>:8796/listening"
+#   rig_voice_webhook_id: "jarvis_rig_say_<random>"
+#   rig_voice_say_url: "http://100.90.201.22:8123/api/webhook/jarvis_rig_say_<random>"
 
 rest_command:
   jarvis_rig_listening:
     url: !secret rig_voice_listening_url
     method: POST
     content_type: application/json
-    payload: '{"on": {{ is_state("input_boolean.jarvis_listening", "on") | to_json }}}'
+    payload: >-
+      {{ {"on": is_state("input_boolean.jarvis_listening", "on"), "say_url": say_url} | to_json }}
     timeout: 5
 
 automation:
@@ -24,6 +28,8 @@ automation:
         minutes: "/2"
     actions:
       - action: rest_command.jarvis_rig_listening
+        data:
+          say_url: !secret rig_voice_say_url
         continue_on_error: true
 
   - id: jarvis_rig_say
@@ -31,14 +37,15 @@ automation:
     mode: queued
     triggers:
       - trigger: webhook
-        webhook_id: jarvis_rig_say
+        webhook_id: !secret rig_voice_webhook_id
         allowed_methods: [POST]
         local_only: false        # the rig reaches HA over the tailnet
     conditions:
       - condition: template      # only while Jake has listening on, and only to a real Echo
         value_template: >-
           {{ is_state('input_boolean.jarvis_listening', 'on')
-             and trigger.json.echo in integration_entities('alexa_media') }}
+             and (trigger.json or {}).get('echo') in integration_entities('alexa_media')
+             and (trigger.json or {}).get('message') }}
     actions:
       - action: script.jarvis_say
         data:

@@ -25,6 +25,7 @@ tailscale serve --bg --tcp 8796 tcp://127.0.0.1:8796
 
 Then a hidden logon task "Jarvis Hey Jarvis" running `pythonw C:\Jarvis\rig-voice\hey_jarvis.py`, with
 `JARVIS_ECHO` set to the Echo in the rig's room. On homebase, add `rig_voice_listening_url` to HA's `secrets.yaml`
-(`http://<rig tailnet IP>:8796/listening`) and copy `packages/rig_voice.yaml` in.
+(`http://<rig tailnet IP>:8796/listening`) plus a random `rig_voice_webhook_id` and the matching `rig_voice_say_url`
+(see the top of `packages/rig_voice.yaml`), and copy that package in. HA hands the reply URL to the rig itself.
 
 Tests: `python -m unittest test_hey_jarvis` (no mic or network needed).

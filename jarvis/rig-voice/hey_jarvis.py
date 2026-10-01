@@ -1,7 +1,8 @@
 """"Hey Jarvis" on the rig's microphone (stopgap until the room speaker / 5060 voice stack exists).
 
 Mic closed unless Home Assistant's "Jarvis listening" switch is on. HA pushes the switch to this listener
-(POST http://<rig>:8796/listening {"on": true}); it starts OFF at boot and HA re-sends the state every 5 minutes.
+(POST http://<rig>:8796/listening {"on": true, "say_url": ...}); it starts OFF at boot and HA re-sends it every
+2 minutes, along with the private webhook URL replies go to (so no secret is copied to the rig by hand).
 When on: openWakeWord hears "Hey Jarvis" -> records until you stop talking -> faster-whisper (GPU if it can,
 else CPU) -> TARS on the laptop answers (it keeps the conversation) -> HA speaks it on the Echo in this room.
 Idea mode: after each reply Jarvis keeps listening ~20 s for a follow-up, no wake word needed.
@@ -24,7 +25,6 @@ TARS_URL = os.environ.get("TARS_URL", "http://100.85.255.99:8790/chat")
 PORT = int(os.environ.get("HEY_JARVIS_PORT", "8796"))
 HOME = os.environ.get("HEY_JARVIS_HOME", r"C:\Jarvis\rig-voice")
 # HA webhook that speaks on an Echo (packages/rig_voice.yaml); JARVIS_ECHO picks the Echo in the rig's room.
-SAY_URL = os.environ.get("JARVIS_SAY_URL", "http://100.90.201.22:8123/api/webhook/jarvis_rig_say")
 ECHO = os.environ.get("JARVIS_ECHO", "media_player.kitchen")
 FOLLOW_UP_S = 20
 LOG = os.path.join(HOME, "hey_jarvis.log")
@@ -35,7 +35,7 @@ SILENCE_RMS = 400            # int16 RMS below this counts as quiet
 END_SILENCE_S = 1.2
 MAX_REQUEST_S = 15
 
-state = {"listening": False, "since": time.time()}
+state = {"listening": False, "since": time.time(), "say_url": os.environ.get("JARVIS_SAY_URL", "")}
 
 
 def log(msg):
@@ -70,6 +70,8 @@ class Control(http.server.BaseHTTPRequestHandler):
             on = body.get("on")
             if isinstance(on, str):
                 on = on.lower() in ("on", "true", "1")
+            if isinstance(body.get("say_url"), str) and body["say_url"].startswith("http"):
+                state["say_url"] = body["say_url"]
             set_listening(bool(on))
             self._send(200, {"listening": state["listening"]})
         except Exception as e:  # noqa: BLE001
@@ -111,8 +113,11 @@ def load_whisper():
         return WhisperModel("base.en", device="cpu", compute_type="int8")
 
 
-def speak(text, url=SAY_URL, echo=ECHO):
+def speak(text, url=None, echo=ECHO):
     """Hand the reply to HA, which says it on the Echo. Returns roughly how long the Echo will be talking."""
+    url = url or state["say_url"]
+    if not url:
+        raise RuntimeError("no say_url from HA yet")
     req = urllib.request.Request(url, data=json.dumps({"message": text, "echo": echo}).encode(), method="POST",
                                  headers={"Content-Type": "application/json"})
     urllib.request.urlopen(req, timeout=15).close()
