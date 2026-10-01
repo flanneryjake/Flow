@@ -169,9 +169,26 @@ def push_review(force=False):
     return 'pushed'
 
 
+TARS = r'C:\Jarvis\tars\tars_server.py'
+
+
+def ensure_tars():
+    """Jarvis TARS chat service (:8790). Started at logon by its own task; this only covers a crash."""
+    if not os.path.exists(TARS) or get('http://127.0.0.1:8790/health') is not None:
+        return 'up'
+    subprocess.Popen([pythonw(), TARS], cwd=os.path.dirname(TARS), creationflags=HIDDEN, close_fds=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    log('TARS chat service was not answering; started it')
+    return 'restarted'
+
+
 if __name__ == '__main__':
     o = ensure_ollama()
     w = ensure_worker()
+    try:
+        ensure_tars()
+    except Exception as e:
+        log(f'TARS check error: {e}')
     try:
         rv = push_review('--push-now' in sys.argv)
     except Exception as e:
