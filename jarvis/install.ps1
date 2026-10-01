@@ -108,9 +108,11 @@ $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGo
     -MultipleInstances IgnoreNew
 
 # Remote Control keeps a hidden console (no output redirect), because without a terminal it refuses to start.
-$rcCmd = "Set-Location '$workDir'; claude remote-control --name '$machine' --permission-mode acceptEdits --verbose --debug-file '$logDir\remote-control-debug.log'"
+# Prefer npm's claude.cmd over its claude.ps1 shim, which won't load where the execution policy blocks scripts (the laptop).
+$claudeExe = if (Get-Command claude.cmd -ErrorAction SilentlyContinue) { 'claude.cmd' } else { 'claude' }
+$rcCmd = "Set-Location '$workDir'; $claudeExe remote-control --name '$machine' --permission-mode acceptEdits --verbose --debug-file '$logDir\remote-control-debug.log'"
 $rcAction = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $workDir `
-    -Argument "-NoProfile -WindowStyle Hidden -Command `"$rcCmd`""
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$rcCmd`""
 Register-ScheduledTask -TaskName 'Jarvis Remote Control' -Action $rcAction -Principal $principal -Settings $settings `
     -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $user) -Force | Out-Null
 
