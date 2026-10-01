@@ -90,25 +90,41 @@ def _has_section(text, name):
 
 
 def include_sections(job_text):
-    """Section names from a job spec's "Include: A, B and C" line (the rig prompts use it)."""
-    m = re.search(r'^\s*Include:\s*(.+)$', job_text or '', re.I | re.M)
-    return [p.strip(' .') for p in re.split(r',|;|\band\b', m.group(1)) if p.strip(' .')] if m else []
+    """Section names from every "Include: A, B and C." in a job prompt, wherever it sits (homebase's rig prompts
+    put it mid-sentence). Each list runs to the end of its sentence or line."""
+    names = []
+    for m in re.finditer(r'\bInclude:\s*([^\n]+?)(?:\.(?=\s|$)|\n|$)', job_text or '', re.I):
+        for p in re.split(r',|;|\band\b', m.group(1)):
+            p = p.strip(' .:"\'')
+            if p and p.lower() not in (n.lower() for n in names):
+                names.append(p)
+    return names
 
 
 def check_rig_output(text, title='', required_sections=(), crisis_line=True, min_words=None, max_words=None,
-                     warn_sections=()):
+                     warn_sections=(), job_prompt='', require_988=None, require_rig_notes=None):
     """Hard checks in code, then Baby Jarvis writes the hub line. Returns
     {"pass": bool, "problems": [...], "warnings": [...], "words": n, "notify": "one line", "model": seconds|None}.
-    required_sections fail the check; warn_sections (e.g. include_sections(job prompt)) and a RIG-NOTES block left
-    in the draft are warnings only, matching Check-RigOutput in homebase's worker.ps1."""
+    Pass the rig job's prompt as job_prompt and it sets the rest the way homebase's Check-RigOutput does:
+      * 988 is required on its own (911 alone fails) whenever the prompt mentions 988; otherwise 988 or 911.
+      * a missing RIG-NOTES block fails whenever the prompt asks for one.
+      * "Include:" sections from the prompt are checked as headings, WARN only.
+    required_sections always fail when missing; require_988 / require_rig_notes override the prompt-based default."""
     problems, warnings = [], []
-    if re.search(r'RIG-NOTES', text):
-        warnings.append('RIG-NOTES block still in the draft')
+    if require_988 is None:
+        require_988 = bool(re.search(r'\b988\b', job_prompt or ''))
+    if require_rig_notes is None:
+        require_rig_notes = bool(re.search(r'RIG-NOTES', job_prompt or ''))
+    warn_sections = list(warn_sections) + [s for s in include_sections(job_prompt) if s not in warn_sections]
+    if require_rig_notes and not re.search(r'RIG-NOTES', text):
+        problems.append('no RIG-NOTES block')
     wmiss = [s for s in warn_sections if s.strip() and not _has_section(text, s)]
     if wmiss:
         warnings.append('Include: sections not found as headings: ' + ', '.join(wmiss))
     words = len(text.split())
-    if crisis_line and not CRISIS.search(text):
+    if require_988 and not re.search(r'\b988\b', text):
+        problems.append('no 988 line' + (' (911 alone is not enough)' if re.search(r'\b911\b', text) else ''))
+    elif crisis_line and not CRISIS.search(text):
         problems.append('no 988/911 crisis line')
     missing = [s for s in required_sections if s.strip() and not _has_section(text, s)]
     if missing:
@@ -271,6 +287,7 @@ def main():
     c.add_argument('--no-crisis', action='store_true')
     c.add_argument('--min-words', type=int)
     c.add_argument('--max-words', type=int)
+    c.add_argument('--prompt-file', help="the rig job's prompt: sets the 988, RIG-NOTES and Include: checks")
     r = sub.add_parser('route')
     r.add_argument('text')
     h = sub.add_parser('ha')
@@ -278,10 +295,14 @@ def main():
     h.add_argument('--entities', help='JSON file with a list of entity/area ids')
     a = ap.parse_args()
     if a.cmd == 'check':
+        prompt = ''
+        if a.prompt_file:
+            with open(a.prompt_file, encoding='utf-8', errors='replace') as f:
+                prompt = f.read()
         with open(a.file, encoding='utf-8', errors='replace') as f:
             res = check_rig_output(f.read(), a.title or os.path.basename(a.file),
                                    [s for s in a.sections.split(',') if s.strip()], not a.no_crisis,
-                                   a.min_words, a.max_words)
+                                   a.min_words, a.max_words, job_prompt=prompt)
     elif a.cmd == 'route':
         res = route_request(a.text)
     else:

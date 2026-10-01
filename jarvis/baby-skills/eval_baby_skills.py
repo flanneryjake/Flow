@@ -23,6 +23,34 @@ CHECKS = [  # (text, sections, expect_pass, expected problem fragment)
     (GOOD + '\nTODO: add handout link', [], False, 'placeholder'),
 ]
 
+PROMPT = ('Write the B07 participant handout on overdose safety. Include: Objectives, Warning Signs and Closing. '
+          'End with the 988 crisis line and 911, then a RIG-NOTES block listing anything you were unsure of.')
+PCHECKS = [  # (draft, expect_pass, expected problem fragment) checked with job_prompt=PROMPT
+    ('''# B07
+## Objectives
+x
+## Warning Signs
+y
+## Closing
+In an emergency call 911.
+RIG-NOTES: none''', False, '988'),
+    ('''# B07
+## Objectives
+x
+## Warning Signs
+y
+## Closing
+Call or text 988, or 911.''', False, 'RIG-NOTES'),
+    ('''# B07
+## Objectives
+x
+## Warning Signs
+y
+## Closing
+Call or text 988, or 911.
+RIG-NOTES: none''', True, ''),
+]
+
 ROUTES = [  # (request, acceptable routes)
     ('is the rig on', {'laptop'}, 'Machine Health: rig Offline since 00:41 (asleep); homebase OK; laptop OK.'),
     ('write a 1,200-word blog post about sober holidays', {'rig'}),
@@ -62,7 +90,13 @@ def main():
         good = r['pass'] == exp and (not frag or frag.lower() in ' '.join(r['problems']).lower())
         ok += good
         print(('OK ' if good else 'BAD'), r['pass'], r['problems'], '|', r['notify'])
-    score['check'] = f'{ok}/{len(CHECKS)}'
+    for text, exp, frag in PCHECKS:
+        r = b.check_rig_output(text, 'B07', job_prompt=PROMPT)
+        good = r['pass'] == exp and (not frag or frag.lower() in ' '.join(r['problems']).lower())
+        ok += good
+        print(('OK ' if good else 'BAD'), r['pass'], r['problems'], r['warnings'], '|', r['notify'])
+    print('include_sections:', b.include_sections(PROMPT))
+    score['check'] = f'{ok}/{len(CHECKS) + len(PCHECKS)}'
     print('== route_request')
     ok = 0
     for text, exp, *ctx in ROUTES:
