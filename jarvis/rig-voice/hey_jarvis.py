@@ -28,6 +28,7 @@ HOME = os.environ.get("HEY_JARVIS_HOME", r"C:\Jarvis\rig-voice")
 ECHO = os.environ.get("JARVIS_ECHO", "media_player.kitchen")
 HA_WEBHOOKS = os.environ.get("JARVIS_HA_WEBHOOKS", "http://100.90.201.22:8123/api/webhook/")  # only HA may set say_url
 FOLLOW_UP_S = 20
+MIC = os.environ.get("JARVIS_MIC", "fifine")   # part of the input device's name; the rig's Fifine USB mic
 LOG = os.path.join(HOME, "hey_jarvis.log")
 RATE = 16000
 FRAME = 1280                 # 80 ms, what openWakeWord expects
@@ -105,6 +106,23 @@ def rms(chunk):
     return float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2))) if len(chunk) else 0.0
 
 
+def pick_mic(devices, want=MIC):
+    """Index and native rate of the first input device whose name contains `want`, else the default input."""
+    for i, d in enumerate(devices):
+        if d.get("max_input_channels", 0) > 0 and want and want.lower() in d["name"].lower():
+            return i, int(d["default_samplerate"])
+    return None, None
+
+
+def to_16k(chunk, rate):
+    """Resample one int16 block to 16 kHz (the mic may only do 44.1/48 kHz)."""
+    import numpy as np
+    if rate == RATE:
+        return chunk
+    n = int(round(len(chunk) * RATE / rate))
+    return np.interp(np.linspace(0, len(chunk) - 1, n), np.arange(len(chunk)), chunk).astype(np.int16)
+
+
 def load_whisper():
     from faster_whisper import WhisperModel
     try:
@@ -135,15 +153,27 @@ def run(once=False):
     whisper = load_whisper()
     frames = queue.Queue()
     follow_up_until = 0.0
-    log("ready")
+    device, rate = pick_mic(sd.query_devices())
+    if device is None:
+        rate = int(sd.query_devices(kind="input")["default_samplerate"])
+        log(f"no input named {MIC!r}; using the default input")
+    log(f"ready on {sd.query_devices(device, 'input')['name']} @ {rate} Hz")
+    pending = []
+
+    def on_audio(d, *_):
+        # Collect the mic's native blocks, hand openWakeWord exact 80 ms frames at 16 kHz.
+        pending.extend(to_16k(d[:, 0].copy(), rate).tolist())
+        while len(pending) >= FRAME:
+            frames.put(np.array(pending[:FRAME], dtype=np.int16))
+            del pending[:FRAME]
 
     while True:
         if not (once or state["listening"]):
             follow_up_until = 0.0
             time.sleep(1)           # mic stays closed while the switch is off
             continue
-        with sd.InputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=FRAME,
-                            callback=lambda d, *_: frames.put(d[:, 0].copy())):
+        with sd.InputStream(device=device, samplerate=rate, channels=1, dtype="int16",
+                            blocksize=int(FRAME * rate / RATE), callback=on_audio):
             got = []
             # Wait for "Hey Jarvis", or, inside the idea-mode window, for any speech at all.
             while (once or state["listening"]) and not got:

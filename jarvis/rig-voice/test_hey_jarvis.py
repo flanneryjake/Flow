@@ -62,6 +62,16 @@ class Test(unittest.TestCase):
             self.assertEqual(json.loads(urllib.request.urlopen(req).read())["listening"], want)
         srv.shutdown()
 
+    def test_pick_mic_by_name(self):
+        devs = [{"name": "Speakers (Realtek)", "max_input_channels": 0, "default_samplerate": 48000},
+                {"name": "Microphone (FIFINE K669 Microphone)", "max_input_channels": 1, "default_samplerate": 48000}]
+        self.assertEqual(hj.pick_mic(devs, "fifine"), (1, 48000))
+        self.assertEqual(hj.pick_mic(devs, "blue yeti"), (None, None))
+
+    def test_to_16k(self):
+        import numpy as np
+        self.assertEqual(len(hj.to_16k(np.zeros(3840, dtype=np.int16), 48000)), 1280)
+
     def test_ask_tars(self):
         srv = http.server.HTTPServer(("127.0.0.1", 0), FakeTars)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
