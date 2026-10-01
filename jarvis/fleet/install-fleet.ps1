@@ -4,8 +4,8 @@
 #   irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/fleet/install-fleet.ps1 | iex
 #
 # What it does:
-#   - saves fleet.py, fleet_api.py, fleet-panel.js and roles.json to C:\Jarvis\fleet, and the updated ghq.py
-#     (its Worker gate) to C:\Jarvis\ghq
+#   - saves fleet.py, fleet_api.py, fleet-panel.js and roles.json to C:\Jarvis\fleet, and adds the Worker gate
+#     (fleet_allows) to this PC's own C:\Jarvis\ghq\ghq.py without replacing the rest of it
 #   - registers the "Jarvis Fleet" task: `fleet.py tick` every 2 minutes, no window. The tick writes this PC's
 #     heartbeat on the pinned "Fleet control" issue, applies its mode (pause / leave or rejoin the tailnet) and
 #     hands back cards stranded on a PC that went quiet.
@@ -28,8 +28,47 @@ New-Item -ItemType Directory -Force -Path $dir, 'C:\Jarvis\ghq', 'C:\Jarvis\logs
 foreach ($f in 'fleet.py', 'fleet_api.py', 'fleet-panel.js', 'roles.json') {
     Invoke-WebRequest -UseBasicParsing "$base/fleet/$f" -OutFile (Join-Path $dir $f)
 }
-Invoke-WebRequest -UseBasicParsing "$base/ghq/ghq.py" -OutFile 'C:\Jarvis\ghq\ghq.py'
 Say "Saved the fleet scripts to $dir"
+
+# Add the Worker gate to this PC's own ghq.py instead of replacing the file, since a PC can carry newer local
+# changes (e.g. the "now" lane). Skipped if the gate is already there.
+$ghqFile = 'C:\Jarvis\ghq\ghq.py'
+if (Test-Path $ghqFile) {
+    $src = [IO.File]::ReadAllText($ghqFile)
+    if ($src -notmatch 'def fleet_allows') {
+        $gateFn = @'
+def fleet_allows(machine):
+    """False when the Fleet panel has this machine paused or disconnected. True if fleet.py isn't installed."""
+    for p in (os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fleet'), r'C:\Jarvis\fleet'):
+        if os.path.exists(os.path.join(p, 'fleet.py')):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+            break
+    try:
+        import fleet
+    except ImportError:
+        return True
+    return fleet.may_take_cards(machine)
+
+
+'@
+        $gateFn += "`n"  # two blank lines before def claim, as in Flow's ghq.py
+        $gateCall = "    if not fleet_allows(machine):`n        return []  # paused or disconnected from the phone app's Fleet panel (fleet/fleet.py)`n"
+        $nl = if ($src -match "`r`n") { "`r`n" } else { "`n" }
+        $rx = [regex]'(?s)(def ready\(machine[^\n]*\n\s+"""(?:(?!""").)*"""\r?\n)'
+        if (-not $rx.IsMatch($src) -or $src -notmatch 'def claim\(') {
+            throw 'ghq.py has an unexpected layout; add the fleet gate by hand (see jarvis/ghq/ghq.py in Flow).'
+        }
+        Copy-Item $ghqFile "$ghqFile.bak-fleet-$(Get-Date -Format yyyyMMdd-HHmmss)"
+        $src = $rx.Replace($src, '$1' + $gateCall.Replace("`n", $nl), 1)
+        $i = $src.IndexOf('def claim(')
+        $src = $src.Substring(0, $i) + $gateFn.Replace("`r`n", "`n").Replace("`n", $nl) + $src.Substring($i)
+        [IO.File]::WriteAllText($ghqFile, $src)
+        Say 'Added the fleet gate to ghq.py (backup kept next to it).'
+    }
+} else {
+    Invoke-WebRequest -UseBasicParsing "$base/ghq/ghq.py" -OutFile $ghqFile
+}
 
 $env:GITHUB_TASKS_TOKEN = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
 & $py.Source (Join-Path $dir 'fleet.py') tick
