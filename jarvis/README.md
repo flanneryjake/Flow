@@ -84,11 +84,13 @@ through `wscript.exe` and a small `.vbs` in `C:\Jarvis\hidden\` that runs the sa
 for it. Remote Control is left alone. Originals are saved in `C:\Jarvis\hidden\original-actions.json`; to undo, set
 `$env:JARVIS_UNHIDE='1'` and run it again. Re-run it after re-running the installer or adding a Jarvis task.
 
-## Displays off at night
+## Displays off on a schedule
 
-`display-off/install-display-off.ps1` registers the task `Jarvis Displays Off` (daily at 23:00, runs as the
-logged-in user, hidden through `wscript.exe`). It turns the monitors off and nothing else: no sleep, hibernate or
-shutdown, and Remote Control, the Workers, Ollama and Tailscale keep running. A mouse move or key press turns the
-screens back on. Each run is logged to `C:\Jarvis\display-off\displays-off.log`. Test with
-`Start-ScheduledTask -TaskName 'Jarvis Displays Off'`; change the time with `$env:JARVIS_DISPLAY_OFF_AT='22:30'`, or
-remove it with `$env:JARVIS_DISPLAY_OFF_REMOVE='1'`, then re-run the installer.
+`display-off/install-display-off.ps1` registers two tasks that run as the logged-in user, hidden through `wscript.exe`:
+`Jarvis Displays Off` (daily at 23:00) and `Jarvis Displays Off Daytime` (Tuesday to Saturday, 05:15 to 13:45: every
+5 minutes it turns the screens off again if there has been no mouse or keyboard input for 3 minutes). They turn the
+monitors off and nothing else: no sleep, hibernate or shutdown, and Remote Control, the Workers, Ollama and Tailscale
+keep running. A mouse move or key press turns the screens back on. Each switch-off is logged to
+`C:\Jarvis\display-off\displays-off.log`. Test with `Start-ScheduledTask -TaskName 'Jarvis Displays Off'`; change the
+night time with `$env:JARVIS_DISPLAY_OFF_AT='22:30'`, or remove both tasks with `$env:JARVIS_DISPLAY_OFF_REMOVE='1'`,
+then re-run the installer.
