@@ -39,13 +39,14 @@ template:
       - name: Alexa last heard
         unique_id: jarvis_alexa_last_heard
         icon: mdi:microphone-message
-        # Newest thing anyone said to any Echo, with which Echo heard it. Feeds the routine log.
+        # Newest thing anyone said to any Echo; attributes say which Echo and when. Feeds the routine log
+        # and the Jarvis voice loop below.
         state: >-
-          {% set ns = namespace(ts=0, text='nothing yet', echo='') %}
+          {% set ns = namespace(ts=0, text='nothing yet') %}
           {% for e in integration_entities('alexa_media') | select('match', 'media_player\.') %}
             {% set t = state_attr(e, 'last_called_timestamp') | int(0) %}
             {% if t > ns.ts and state_attr(e, 'last_called_summary') %}
-              {% set ns.ts = t %}{% set ns.text = state_attr(e, 'last_called_summary') %}{% set ns.echo = e %}
+              {% set ns.ts = t %}{% set ns.text = state_attr(e, 'last_called_summary') %}
             {% endif %}
           {% endfor %}
           {{ ns.text[:250] }}
@@ -57,3 +58,50 @@ template:
               {% if t > ns.ts %}{% set ns.ts = t %}{% set ns.echo = e %}{% endif %}
             {% endfor %}
             {{ ns.echo }}
+          ts: >-
+            {{ integration_entities('alexa_media') | select('match', 'media_player\.')
+               | map('state_attr', 'last_called_timestamp') | map('int', 0) | max(default=0) }}
+
+# --- "Alexa, Jarvis ..." -> TARS on the laptop -> answer spoken on the same Echo -------------------
+rest_command:
+  jarvis_tars_chat:
+    url: http://100.85.255.99:8790/chat
+    method: POST
+    content_type: application/json
+    payload: '{{ {"text": text} | to_json }}'
+    timeout: 90
+
+automation:
+  - id: jarvis_voice_loop
+    alias: Jarvis answers "Alexa, Jarvis ..." on the same Echo
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.alexa_last_heard
+        attribute: ts
+    conditions:
+      # Only requests that start with "Jarvis" ever leave HA; everything else just stays in the log.
+      - condition: template
+        value_template: >-
+          {{ states('sensor.alexa_last_heard') | lower is match('\s*(hey\s+|ok\s+)?jarvis\b') }}
+    actions:
+      - variables:
+          echo: "{{ state_attr('sensor.alexa_last_heard', 'echo') }}"
+          ask: >-
+            {{ states('sensor.alexa_last_heard') | regex_replace('(?i)^\s*(hey\s+|ok\s+)?jarvis[\s,.]*', '') }}
+      - action: rest_command.jarvis_tars_chat
+        data:
+          text: "{{ ask if ask else 'hello' }}"
+        response_variable: tars
+        continue_on_error: true
+      - action: notify.alexa_media
+        data:
+          target: "{{ echo }}"
+          message: >-
+            {% if tars is defined and tars.status == 200 and tars.content is mapping and tars.content.reply %}
+              {{ tars.content.reply[:400] }}
+            {% else %}
+              Sorry, TARS on the laptop isn't answering right now.
+            {% endif %}
+          data:
+            type: tts

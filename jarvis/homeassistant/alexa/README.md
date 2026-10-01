@@ -14,6 +14,14 @@ What Jarvis gets:
   requests, alarms, timers, media, plus any lights, plugs or phones HA knows about) to
   `C:\Jarvis\routine\YYYY-MM-DD.jsonl` every night at 4:05 AM. That is the raw material for learning the routine.
 
+- **"Alexa, Jarvis ..."**: anything said to an Echo that starts with "Jarvis" goes to TARS on the laptop
+  (`POST http://100.85.255.99:8790/chat`), and the answer is spoken on the same Echo (automation
+  `jarvis_voice_loop`). Nothing else said to the Echos leaves HA.
+- **Jarvis drives Alexa**: `jarvis_alexa.py do "turn off the bedroom lights"` sends a command as if spoken, and
+  `routine "Good night"` runs an Alexa routine, so anything Alexa controls, Jarvis controls.
+
+Jarvis's own wake word and voice (not Alexa's) are in `../voice/`.
+
 ## Install (homebase, Remote Control session)
 
 Prerequisite: HA onboarding finished (Jake's owner account exists). Then, from this folder:
@@ -47,9 +55,8 @@ Tests: `python -m unittest test_jarvis_alexa` in this folder (fake HA server, no
 
 ## Later
 
-- **"Alexa, tell Jarvis ..."**: Alexa answers "I don't know that" to unknown phrases, so voice commands for Jarvis need
-  an Alexa app routine per phrase (action: Wait). HA still sees the words through `sensor.alexa_last_heard`, and an
-  automation can turn them into task cards.
+- Alexa itself still replies "I'm not sure" to "Alexa, Jarvis ..." before Jarvis answers, because Amazon has no
+  catch-all phrase for routines. A private Alexa skill named Jarvis would remove that; the `../voice/` path avoids it.
 - **Alexa controlling HA things by voice** (rig wake, Jarvis scripts): needs the Alexa Smart Home skill (Nabu Casa,
   or a self-hosted AWS Lambda). Not needed for Jarvis to use the Echos.
 - Smart plugs and bulbs already paired to Alexa should be added to HA with their own integration where one exists, so

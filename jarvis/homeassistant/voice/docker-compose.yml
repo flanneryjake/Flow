@@ -1,0 +1,22 @@
+# Jarvis's own voice stack for Home Assistant Assist, on homebase (WSL2 Docker, next to HA).
+#   cd /mnt/c/Jarvis/voice && docker compose up -d
+# Then in HA add three Wyoming integrations: 127.0.0.1 ports 10300 (ears), 10200 (voice), 10400 (wake word).
+services:
+  whisper:            # speech -> text, CPU, small model so the old laptop keeps up
+    image: rhasspy/wyoming-whisper
+    command: --model base-int8 --language en
+    ports: ["10300:10300"]
+    volumes: ["./data/whisper:/data"]
+    restart: unless-stopped
+  piper:              # text -> speech; British male voice for Jarvis
+    image: rhasspy/wyoming-piper
+    command: --voice en_GB-alan-medium
+    ports: ["10200:10200"]
+    volumes: ["./data/piper:/data"]
+    restart: unless-stopped
+  openwakeword:       # "Hey Jarvis" ships as a built-in model
+    image: rhasspy/wyoming-openwakeword
+    command: --preload-model hey_jarvis
+    ports: ["10400:10400"]
+    volumes: ["./data/openwakeword:/custom"]
+    restart: unless-stopped

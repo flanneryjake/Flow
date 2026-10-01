@@ -6,6 +6,8 @@ jarvis-bot service user that install-alexa.sh creates, so no token is ever paste
   python jarvis_alexa.py login                 # first run: trade the bot password for a refresh token
   python jarvis_alexa.py devices               # list the Echos HA can see
   python jarvis_alexa.py say "Dinner's ready" [--echo kitchen] [--announce]
+  python jarvis_alexa.py do "turn off the bedroom lights" [--echo kitchen]   # as if spoken to Alexa
+  python jarvis_alexa.py routine "Good night" [--echo kitchen]               # run an Alexa routine
   python jarvis_alexa.py heard [--hours 24]    # latest thing said to each Echo (full history is in export)
   python jarvis_alexa.py export [--day 2026-10-01]   # one day of apartment state changes -> routine log
 
@@ -107,6 +109,15 @@ def pick_echo(players, name):
     return hits[0]["entity_id"]
 
 
+def first_real_echo(players):
+    """A physical Echo: skips Amazon's speaker groups ("Everywhere") and the phone app ("This Device")."""
+    real = [p["entity_id"] for p in players
+            if not p["attributes"].get("friendly_name", "").lower().startswith(("everywhere", "this device"))]
+    if not real:
+        raise SystemExit("No Echos to send that to yet.")
+    return real[0]
+
+
 def heard_from(states, since):
     """Utterances the Echos reported, newest first, from current state (live) or history rows."""
     out = []
@@ -157,8 +168,12 @@ def main(argv=None):
     sub.add_parser("devices")
     p = sub.add_parser("say")
     p.add_argument("message")
-    p.add_argument("--echo", help="part of the Echo's name; default is every Echo")
+    p.add_argument("--echo", help="part of the Echo's name; default is the first real Echo")
     p.add_argument("--announce", action="store_true", help="announcement chime instead of plain speech")
+    for name in ("do", "routine"):
+        p = sub.add_parser(name)
+        p.add_argument("text")
+        p.add_argument("--echo", help="part of the Echo's name; default is the first real Echo")
     p = sub.add_parser("heard")
     p.add_argument("--hours", type=float, default=24)
     p = sub.add_parser("export")
@@ -182,13 +197,19 @@ def main(argv=None):
             for p in players:
                 print("%-45s %-10s %s" % (p["entity_id"], p["state"], p["attributes"].get("friendly_name", "")))
         elif args.cmd == "say":
-            targets = [pick_echo(players, args.echo)] if args.echo else [p["entity_id"] for p in players]
+            targets = [pick_echo(players, args.echo)] if args.echo else [first_real_echo(players)]
             if not targets:
                 raise SystemExit("No Echos to talk to yet.")
             _request("POST", "/api/services/notify/alexa_media", {
                 "message": args.message, "target": targets,
                 "data": {"type": "announce" if args.announce else "tts"}}, token=token)
             print("Said it on: " + ", ".join(targets))
+        elif args.cmd in ("do", "routine"):
+            target = pick_echo(players, args.echo) if args.echo else first_real_echo(players)
+            _request("POST", "/api/services/media_player/play_media", {
+                "entity_id": target, "media_content_id": args.text,
+                "media_content_type": "custom" if args.cmd == "do" else "routine"}, token=token)
+            print("Sent to %s: %s" % (target, args.text))
         elif args.cmd == "heard":
             since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=args.hours)
             for r in heard_from(states, since):

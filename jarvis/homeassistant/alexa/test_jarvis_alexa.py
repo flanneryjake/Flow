@@ -89,6 +89,16 @@ class BridgeTest(unittest.TestCase):
                                                  "data": {"type": "announce"}})
         self.assertIn(("GET", "/api/states", "Bearer acc"), FakeHA.calls)
 
+    def test_do_sends_custom_command(self):
+        ja._save(ja.TOKEN_FILE, {"refresh_token": "ref"})
+        ja.main(["do", "turn off the lights"])
+        call = [c for c in FakeHA.calls if c[1] == "/api/services/media_player/play_media"][0]
+        self.assertEqual(json.loads(call[2])["media_content_type"], "custom")
+
+    def test_first_real_echo_skips_groups(self):
+        group = {"entity_id": "media_player.everywhere", "attributes": {"friendly_name": "Everywhere"}}
+        self.assertEqual(ja.first_real_echo([group, KITCHEN]), "media_player.kitchen_echo")
+
     def test_export_writes_jsonl(self):
         ja._save(ja.TOKEN_FILE, {"refresh_token": "ref"})
         ja.main(["export", "--day", "2026-10-01"])
