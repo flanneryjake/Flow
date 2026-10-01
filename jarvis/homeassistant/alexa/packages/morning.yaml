@@ -3,7 +3,8 @@
 #
 # The alarms are real Alexa one-time alarms that HA sets the evening before. So "Alexa, cancel/turn off my alarms"
 # works the normal way and clears only that morning; the next scheduled evening HA sets them again.
-# Setting them is muted (volume 0, then restored) so Alexa's "alarm set" replies don't talk at 9 PM.
+# Alexa's seven "alarm set" replies are muted (volume 0, then restored); then Jarvis announces the set once
+# on the same Echo. Jake asked 2026-10-01 for "the night before at 9" with an announcement; 9 PM assumed.
 
 automation:
   - id: jarvis_set_morning_alarms
@@ -50,6 +51,15 @@ automation:
       - action: media_player.volume_set
         target: { entity_id: "{{ echo }}" }
         data: { volume_level: "{{ old_volume }}" }
+      - delay: { seconds: 2 }
+      - action: notify.alexa_media
+        data:
+          target: "{{ echo }}"
+          message: >-
+            Jarvis here. Tomorrow's alarms are set for 4, 4:10, 4:15, 4:25, 4:30, 4:35 and 4:40,
+            and music at 4:45. Say "Alexa, cancel my alarms" to skip just tomorrow.
+          data:
+            type: announce
 
   - id: jarvis_morning_music
     alias: Morning music at 4:45 AM (Tue-Sat)
