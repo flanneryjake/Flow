@@ -15,6 +15,7 @@ automation:
     triggers:
       - trigger: state
         entity_id: input_boolean.jarvis_listening
+        from: ["on", "off"]   # not from unavailable/unknown, so restarts stay quiet
         to: ["on", "off"]
     actions:
       - action: script.jarvis_say
