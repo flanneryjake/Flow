@@ -107,7 +107,8 @@ SCHEMA = {
 }
 
 wake_event = threading.Event()
-status = {'state': 'starting', 'since': dt.datetime.now().isoformat(timespec='seconds')}
+status = {'state': 'starting', 'since': dt.datetime.now().isoformat(timespec='seconds'),
+          'started_epoch': time.time()}   # the watchdog restarts the Worker when its code is newer than this
 
 
 # ----------------------------------------------------------------------------- logging / state

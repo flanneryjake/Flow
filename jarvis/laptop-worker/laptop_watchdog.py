@@ -70,6 +70,31 @@ def ensure_ollama():
     return 'down'
 
 
+CODE_FILES = (WORKER, r'C:\Jarvis\ghq\ghq.py')
+
+
+def code_changed(health):
+    """True when laptop_worker.py or ghq.py was replaced after the running Worker started. On 9/30 the GitHub-queue
+    version was copied in two minutes after a Notion-only copy started, and that copy ran for 7 hours without
+    seeing a single GitHub card."""
+    started = (health or {}).get('started_epoch')
+    if not started:
+        return bool(health) and 'started_epoch' not in health   # a pre-fix Worker: restart once onto new code
+    try:
+        return max(os.path.getmtime(f) for f in CODE_FILES if os.path.exists(f)) > started + 2
+    except ValueError:
+        return False
+
+
+def stop_worker():
+    subprocess.run(['powershell', '-NoProfile', '-Command',
+                    "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
+                    "Where-Object { $_.CommandLine -match 'laptop_worker\\.py' } | "
+                    "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
+                   creationflags=0x08000000, capture_output=True)
+    time.sleep(3)
+
+
 def ensure_worker():
     health = get(WORKER_URL)
     stale = True
@@ -77,16 +102,15 @@ def ensure_worker():
         stale = (time.time() - os.path.getmtime(HEARTBEAT)) > 600
     except OSError:
         pass
-    if health is not None and not (stale and not str(health.get('state', '')).startswith('Working')):
+    working = str((health or {}).get('state', '')).startswith('Working')
+    if health is not None and not working and code_changed(health):
+        stop_worker()
+        log('Worker code changed since it started; restarted it onto the new code')
+    elif health is not None and not (stale and not working):
         return 'up'
-    if health is not None:
+    elif health is not None:
         # Answering but its loop has stopped writing the heartbeat: end it so a fresh copy can take the port.
-        subprocess.run(['powershell', '-NoProfile', '-Command',
-                        "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
-                        "Where-Object { $_.CommandLine -match 'laptop_worker\\.py' } | "
-                        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
-                       creationflags=0x08000000, capture_output=True)
-        time.sleep(3)
+        stop_worker()
         log('Worker answered but its heartbeat was over 10 min old; stopped it')
     subprocess.Popen([pythonw(), WORKER], cwd=HERE, creationflags=HIDDEN, close_fds=True,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
