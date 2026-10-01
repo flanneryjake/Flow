@@ -170,6 +170,7 @@ def push_review(force=False):
 
 
 TARS = r'C:\Jarvis\tars\tars_server.py'
+POWER = r'C:\Jarvis\power\power_listener.py'
 
 
 def ensure_tars():
@@ -187,8 +188,12 @@ if __name__ == '__main__':
     w = ensure_worker()
     try:
         ensure_tars()
+        if os.path.exists(POWER) and get('http://127.0.0.1:8792/health') is None:
+            subprocess.Popen([pythonw(), POWER], cwd=os.path.dirname(POWER), creationflags=HIDDEN, close_fds=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+            log('Power listener was not answering; started it')
     except Exception as e:
-        log(f'TARS check error: {e}')
+        log(f'TARS/power check error: {e}')
     try:
         rv = push_review('--push-now' in sys.argv)
     except Exception as e:
