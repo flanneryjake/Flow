@@ -94,3 +94,5 @@ keep running. A mouse move or key press turns the screens back on. Each switch-o
 `C:\Jarvis\display-off\displays-off.log`. Test with `Start-ScheduledTask -TaskName 'Jarvis Displays Off'`; change the
 night time with `$env:JARVIS_DISPLAY_OFF_AT='22:30'`, or remove both tasks with `$env:JARVIS_DISPLAY_OFF_REMOVE='1'`,
 then re-run the installer.
+On a Modern Standby PC (`powercfg /a` lists S0 Low Power Idle, like the 5060 laptop) the script logs
+`skipped: modern standby` and does nothing, because turning the monitor off there puts the whole PC into standby.

@@ -14,7 +14,8 @@
 #
 # How it works: C:\Jarvis\display-off\displays-off.ps1 posts WM_SYSCOMMAND / SC_MONITORPOWER (2 = off) to all
 # top-level windows. PostMessage (not SendMessage) so a hung window can't block it. With -IfIdleMinutes N it first
-# checks GetLastInputInfo and does nothing if there was input in the last N minutes. The tasks start it through
+# checks GetLastInputInfo and does nothing if there was input in the last N minutes. On a Modern Standby PC
+# (powercfg /a lists S0 Low Power Idle) it never turns the monitors off, because that puts the whole PC to sleep. The tasks start it through
 # wscript.exe and a .vbs with window style 0, the same pattern as hide-task-windows.ps1, so no console flashes.
 
 $ErrorActionPreference = 'Stop'
@@ -51,6 +52,13 @@ public static uint IdleMs() {
 $log = Join-Path $PSScriptRoot 'displays-off.log'
 $idleMin = [Math]::Floor([Jarvis.Monitor]::IdleMs() / 60000)
 if ($IfIdleMinutes -gt 0 -and $idleMin -lt $IfIdleMinutes) { return }   # someone is using it; try again next run
+# On a Modern Standby PC (S0 Low Power Idle, e.g. the 5060 laptop) monitor-off sends the whole machine into standby,
+# pausing Remote Control and the Worker, so skip it there; Windows' own idle screen timer handles those screens.
+$avail = ((powercfg /a) -join "`n") -split 'not available' | Select-Object -First 1
+if ($avail -match 'S0 Low Power Idle') {
+    Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss}  skipped: modern standby" -f (Get-Date))
+    return
+}
 # HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2 = power off
 $ok = [Jarvis.Monitor]::PostMessage([IntPtr]0xFFFF, 0x0112, [IntPtr]0xF170, [IntPtr]2)
 Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss}  displays off  posted={1}  idle={2}min" -f (Get-Date), $ok, $idleMin)
