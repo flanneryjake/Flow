@@ -83,3 +83,12 @@ every run, even with `-WindowStyle Hidden`. `hide-task-windows.ps1` rewrites eve
 through `wscript.exe` and a small `.vbs` in `C:\Jarvis\hidden\` that runs the same command with no window and waits
 for it. Remote Control is left alone. Originals are saved in `C:\Jarvis\hidden\original-actions.json`; to undo, set
 `$env:JARVIS_UNHIDE='1'` and run it again. Re-run it after re-running the installer or adding a Jarvis task.
+
+## Displays off at night
+
+`display-off/install-display-off.ps1` registers the task `Jarvis Displays Off` (daily at 23:00, runs as the
+logged-in user, hidden through `wscript.exe`). It turns the monitors off and nothing else: no sleep, hibernate or
+shutdown, and Remote Control, the Workers, Ollama and Tailscale keep running. A mouse move or key press turns the
+screens back on. Each run is logged to `C:\Jarvis\display-off\displays-off.log`. Test with
+`Start-ScheduledTask -TaskName 'Jarvis Displays Off'`; change the time with `$env:JARVIS_DISPLAY_OFF_AT='22:30'`, or
+remove it with `$env:JARVIS_DISPLAY_OFF_REMOVE='1'`, then re-run the installer.
