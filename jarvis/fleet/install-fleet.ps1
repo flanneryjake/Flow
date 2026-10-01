@@ -1,7 +1,7 @@
 # Jarvis fleet control: run ONCE per PC (homebase, rig, laptop), after install-ghq.ps1.
 # In a normal PowerShell window, paste:
 #
-#   irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/fleet/install-fleet.ps1 | iex
+#   $t=[Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN','User'); if(!$t){$t=Read-Host 'GitHub token'; [Environment]::SetEnvironmentVariable('GITHUB_TASKS_TOKEN',$t,'User')}; irm -Headers @{Authorization="Bearer $t"; Accept='application/vnd.github.raw'} 'https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/fleet/install-fleet.ps1?ref=claude/eager-knuth-lakcxt' | iex
 #
 # What it does:
 #   - saves fleet.py, fleet_api.py, fleet-panel.js and roles.json to C:\Jarvis\fleet, and adds the Worker gate
@@ -12,7 +12,16 @@
 # Nothing is disconnected by installing; every PC starts as active.
 
 $ErrorActionPreference = 'Stop'
-$base = 'https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis'
+$flowRef = 'claude/eager-knuth-lakcxt'
+# Flow is private, so files come through the GitHub API with this user's GITHUB_TASKS_TOKEN
+# (the token needs Contents: Read-only on flanneryjake/Flow).
+function Get-FlowFile([string]$path, [string]$out) {
+    $tok = if ($env:GITHUB_TASKS_TOKEN) { $env:GITHUB_TASKS_TOKEN } else { [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User') }
+    $h = @{ Accept = 'application/vnd.github.raw'; 'User-Agent' = 'jarvis-installer' }
+    if ($tok) { $h.Authorization = "Bearer $tok" }
+    try { Invoke-WebRequest -UseBasicParsing -Headers $h "https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/$path`?ref=$flowRef" -OutFile $out }
+    catch { throw "Could not download jarvis/$path from Flow ($_). Check that GITHUB_TASKS_TOKEN can read flanneryjake/Flow." }
+}
 $dir  = 'C:\Jarvis\fleet'
 function Say([string]$m, [string]$c = 'Cyan') { Write-Host $m -ForegroundColor $c }
 
@@ -26,7 +35,7 @@ if (-not (Test-Path $pyw)) { $pyw = $py.Source }
 
 New-Item -ItemType Directory -Force -Path $dir, 'C:\Jarvis\ghq', 'C:\Jarvis\logs' | Out-Null
 foreach ($f in 'fleet.py', 'fleet_api.py', 'fleet-panel.js', 'roles.json') {
-    Invoke-WebRequest -UseBasicParsing "$base/fleet/$f" -OutFile (Join-Path $dir $f)
+    Get-FlowFile "fleet/$f" (Join-Path $dir $f)
 }
 Say "Saved the fleet scripts to $dir"
 
@@ -67,7 +76,7 @@ def fleet_allows(machine):
         Say 'Added the fleet gate to ghq.py (backup kept next to it).'
     }
 } else {
-    Invoke-WebRequest -UseBasicParsing "$base/ghq/ghq.py" -OutFile $ghqFile
+    Get-FlowFile "ghq/ghq.py" $ghqFile
 }
 
 $env:GITHUB_TASKS_TOKEN = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
@@ -89,7 +98,7 @@ Say 'Registered the "Jarvis Fleet" task (every 2 minutes).'
 
 $hide = Join-Path $env:TEMP 'hide-task-windows.ps1'
 try {
-    Invoke-WebRequest -UseBasicParsing "$base/hide-task-windows.ps1" -OutFile $hide
+    Get-FlowFile "hide-task-windows.ps1" $hide
     & powershell -NoProfile -ExecutionPolicy Bypass -File $hide | Out-Null
 } catch { Say "Could not run hide-task-windows.ps1 ($_); the task may flash a window." 'Yellow' }
 
