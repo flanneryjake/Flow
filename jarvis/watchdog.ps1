@@ -368,8 +368,22 @@ $waitingNames = @($waitingCards | ForEach-Object { Plain $_.properties.Task.titl
 # A machine whose Worker reads GitHub Issues (JARVIS_QUEUE=github) counts its waiting cards there instead:
 # open, status:approved, unclaimed, for this machine or any; plus Notion cards still Approved that have no GitHub
 # copy yet (no issue with the same title or carrying the Notion page id). Claims come from the claim comments.
+# No JARVIS_QUEUE variable (agent.py may keep it in its own settings): treat it as github when agent.log mentions
+# queue=github or ghq, or when this machine posted a claim comment in the tasks repo in the last 24 h.
 $queueMode = @('Process', 'User', 'Machine') | ForEach-Object { [Environment]::GetEnvironmentVariable('JARVIS_QUEUE', $_) } |
     Where-Object { $_ } | Select-Object -First 1
+if (-not $queueMode -and [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')) {
+    if (@($agentLines | Where-Object { $_ -match '(?i)queue\s*[=:]\s*github|\bghq\b' }).Count) { $queueMode = 'github' }
+    else {
+        try {
+            $repoQ = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
+            $since = (Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $recent = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$repoQ/issues/comments?since=$since&per_page=100" -TimeoutSec 30 -Headers @{
+                Authorization = "Bearer $([Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User'))"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'jarvis-watchdog' })
+            if (@($recent | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " -and ([datetime]$_.created_at).ToUniversalTime() -gt (Get-Date).ToUniversalTime().AddHours(-24) }).Count) { $queueMode = 'github' }
+        } catch { Log "GitHub queue check failed: $(Redact $_.Exception.Message)" }
+    }
+}
 if ("$queueMode".Trim().ToLower() -eq 'github') {
     $ghTok  = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
     $ghRepo = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
