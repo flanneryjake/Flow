@@ -1,63 +1,228 @@
 # Jarvis watchdog. Runs every 5 min as a scheduled task (installed by install.ps1).
 #  1. Keeps `claude remote-control` alive, so phone/cloud Claude sessions can always reach this PC.
-#  2. Writes this machine's row in the Notion "Machine Health" table (Remote Control, Worker state, last card
-#     claimed, approved cards waiting, full snapshot), so a cloud session (which can't get onto Tailscale)
-#     and Jake's phone can see what this PC is doing and why a job is stuck. The table's Health column
-#     turns red on its own when a machine stops checking in for 15 min.
-# It never runs Notion cards or anything else: its only actions are starting the Remote Control task,
-# reading the Tasks board, and writing this machine's health row.
+#  2. Rewrites this machine's pinned "Health: <machine>" issue in the GitHub tasks repo (Remote Control, Worker
+#     state, last card claimed, approved cards waiting, full snapshot), so a cloud session (which can't get onto
+#     Tailscale) and Jake's phone can see what this PC is doing and why a job is stuck.
+# It never runs cards or anything else: its only actions are starting the Remote Control task, reading the
+# tasks repo, and writing this machine's health issue. Notion is no longer read or written (retired 2026-10-02).
 
 param(
-    [switch]$DryRun,    # print the Notion update instead of sending it (no push either)
+    [switch]$DryRun,    # print the health update instead of sending it (no push either)
     [switch]$TestPush   # after the normal check, send one test notification to Jake's phone through the hub
 )
 
 $ErrorActionPreference = 'Continue'
 $root    = $PSScriptRoot
 # Plain string: in Windows PowerShell 5.1 a Get-Content line carries PSPath/PSProvider notes that ConvertTo-Json
-# serializes in full, which made the Tasks query body too large for Notion (413).
+# serializes in full, which bloated request bodies.
 $machine = [string](Get-Content (Join-Path $root 'machine.txt') -ErrorAction SilentlyContinue | Select-Object -First 1)
 $machine = $machine.Trim()
 if (-not $machine) { $machine = $env:COMPUTERNAME }
-# Rows in the "🩺 Machine Health" database under Jarvis Command Center.
-$healthRows = @{
-    homebase = '3ea11c3639af816bbd70fd523fe28b81'
-    rig      = '3ea11c3639af81b5af25cb91f2f88cdd'
-}
-$tasksDb      = '7c1c59e927644dfba461c88a67dbd32c'   # Notion Tasks board
 $idleAfterMin = 15   # Worker counts as idle with cards waiting once nothing has been claimed for this long
 $logDir = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir 'watchdog.log'
 if ((Test-Path $log) -and (Get-Item $log).Length -gt 1MB) { Move-Item $log "$log.old" -Force }
 function Log([string]$m) { "$(Get-Date -Format 'MM/dd HH:mm:ss') $m" | Add-Content -Path $log }
-function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-)[A-Za-z0-9_\-]{16,}', '<redacted>' }
+function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-|ghp_|github_pat_)[A-Za-z0-9_\-]{16,}', '<redacted>' }
 
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("$(Get-Date -Format 'MM/dd HH:mm') $machine watchdog")
 
+# GitHub tasks repo (cards, claims and the health issues). Token: GITHUB_TASKS_TOKEN user environment variable.
+$ghTok  = @('User', 'Machine', 'Process') | ForEach-Object { [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', $_) } |
+    Where-Object { $_ } | Select-Object -First 1
+$ghRepo = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
+$ghHdr  = @{ Authorization = "Bearer $ghTok"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'jarvis-watchdog' }
+function Invoke-GH([string]$method, [string]$path, $body) {
+    $a = @{ Method = $method; Uri = "https://api.github.com/repos/$ghRepo/$path"; Headers = $ghHdr; TimeoutSec = 30 }
+    if ($null -ne $body) { $a.Body = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 8)); $a.ContentType = 'application/json; charset=utf-8' }
+    Invoke-RestMethod @a
+}
+# This machine's (and on homebase, the rig's) "Health: <machine>" issue, label health.
+$healthIssues = @()
+if ($ghTok) {
+    try { $healthIssues = @(Invoke-GH Get 'issues?state=open&labels=health&per_page=100') }
+    catch { Log "Reading the health issues failed: $(Redact $_.Exception.Message)" }
+}
+function Get-HealthIssue([string]$m) { $healthIssues | Where-Object { "$($_.title)" -match "^Health: $m(\s|$)" } | Select-Object -First 1 }
+$myHealth = Get-HealthIssue $machine
+
+# Remote kick: adding the label "restart-rc" to this machine's health issue (by Jake from the GitHub app, or by a
+# cloud Claude session) makes this run restart Remote Control even if its process looks alive, e.g. when it is
+# running but no longer connected. Section 6 removes the label again.
+$kickLabel = 'restart-rc'
+$kick = $myHealth -and @($myHealth.labels | ForEach-Object { $_.name }) -contains $kickLabel -and -not $DryRun
+
 # --- 1. Remote Control ---------------------------------------------------------------
-$rcProc = Get-CimInstance Win32_Process -Filter "Name='claude.exe' OR Name='node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'remote-control' }
-if ($rcProc) {
-    $rcState = 'Up'
-    $lines.Add("Remote Control: UP (pid $(@($rcProc)[0].ProcessId))")
-} else {
-    $task = Get-ScheduledTask -TaskName 'Jarvis Remote Control' -ErrorAction SilentlyContinue
-    if ($task) {
-        Start-ScheduledTask -TaskName 'Jarvis Remote Control'
-        Log 'Remote Control was down; started the task.'
-        $rcState = 'Restarted'
-        $lines.Add('Remote Control: WAS DOWN, restarted just now')
-    } else {
-        $rcState = 'Task missing'
-        $lines.Add('Remote Control: task missing (re-run install.ps1)')
+# Two kinds of copy can be running:
+#  - the task's copy. On homebase the task runs as S4U, so it lives in session 0, and this watchdog (not elevated)
+#    can't read its command line. It is found through Task Scheduler instead: the running task's engine PID (its
+#    powershell wrapper) and any claude.exe under it.
+#  - a copy typed into a terminal by hand, found by its command line (`claude remote-control`, whatever the exe name).
+$rcTaskName = 'Jarvis Remote Control'
+$wrappers = 'powershell.exe', 'pwsh.exe', 'cmd.exe', 'conhost.exe'
+function Get-Descendants($rootIds, $all) {
+    $found = New-Object System.Collections.Generic.List[object]
+    $queue = New-Object System.Collections.Generic.Queue[int]
+    foreach ($r in $rootIds) { $queue.Enqueue([int]$r) }
+    while ($queue.Count -gt 0) {
+        $id = $queue.Dequeue()
+        foreach ($c in @($all | Where-Object { $_.ParentProcessId -eq $id -and $_.ProcessId -ne $id })) {
+            if ($found.ProcessId -notcontains $c.ProcessId) { $found.Add($c); $queue.Enqueue([int]$c.ProcessId) }
+        }
+    }
+    return , $found
+}
+function Get-TaskEnginePids($task) {
+    try {
+        $svc = New-Object -ComObject Schedule.Service
+        $svc.Connect()
+        $path = $task.TaskPath + $task.TaskName
+        return @($svc.GetRunningTasks(1) | Where-Object { $_.Path -eq $path } | ForEach-Object { [int]$_.EnginePID } | Where-Object { $_ })
+    } catch {
+        # Fallback: a session-0 powershell started by Task Scheduler's svchost. Never guess "nothing is running",
+        # since that would make the watchdog stop a working copy.
+        $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+        $svch = @($all | Where-Object { $_.Name -ieq 'svchost.exe' } | ForEach-Object { $_.ProcessId })
+        return @($all | Where-Object { $_.SessionId -eq 0 -and $wrappers -contains "$($_.Name)".ToLower() -and $svch -contains $_.ParentProcessId } | ForEach-Object { [int]$_.ProcessId })
     }
 }
-$rcDebug = Join-Path $logDir 'remote-control-debug.log'
-if (Test-Path $rcDebug) {
+# Returns @{ task = claude.exe processes under the running task; hand = hand-started copies; engine = wrapper PIDs }
+function Get-RcCopies($task) {
+    $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $engine = if ($task) { Get-TaskEnginePids $task } else { @() }
+    $under = if ($engine) { Get-Descendants $engine $all } else { @() }
+    $taskRc = @($under | Where-Object { $_.Name -ieq 'claude.exe' -or $_.Name -ieq 'node.exe' })
+    $underIds = @($under | ForEach-Object { $_.ProcessId }) + $engine
+    # A hand copy's own child claude.exe (sessions it spawns) carries no remote-control in its command line, so
+    # counting only command-line matches keeps a hand copy to one entry per copy.
+    $hand = @($all | Where-Object {
+        $_.CommandLine -match '\bremote-control\b' -and $wrappers -notcontains "$($_.Name)".ToLower() -and
+        $_.ProcessId -ne $PID -and $underIds -notcontains $_.ProcessId
+    })
+    # A copy this watchdog started directly sits under a visible wrapper whose command line carries remote-control;
+    # that counts as the task's command, not a hand copy.
+    $hand = @($hand | Where-Object {
+        $pp = $_.ParentProcessId
+        -not ($all | Where-Object { $_.ProcessId -eq $pp -and $wrappers -contains "$($_.Name)".ToLower() -and $_.CommandLine -match '\bremote-control\b' })
+    })
+    $direct = @($all | Where-Object {
+        $_.CommandLine -match '\bremote-control\b' -and $wrappers -notcontains "$($_.Name)".ToLower() -and
+        $_.ProcessId -ne $PID -and $underIds -notcontains $_.ProcessId -and $hand.ProcessId -notcontains $_.ProcessId
+    })
+    return @{ task = @($taskRc) + $direct; hand = $hand; engine = $engine; all = $all }
+}
+function Test-RcUp($task) { $c = Get-RcCopies $task; return [bool]($c.task -or $c.hand) }
+
+# Restart order, each step only if the one before didn't bring Remote Control back:
+#  1. Stop the task run if Task Scheduler still holds one with no claude under it (a plain start is refused with
+#     0x800710E0 while a run is "going", because the task won't start a second instance), then start the task.
+#  2. Start the task's own command directly from this watchdog run (same user, hidden window).
+function Restart-RemoteControl($task, [bool]$force) {
+    $notes = New-Object System.Collections.Generic.List[string]
+    $c = Get-RcCopies $task
+    $task = Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+    if ($task.State -eq 'Running') {
+        Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+        $notes.Add($(if ($force) { 'stopped the task run' } else { 'stopped a task run with no Remote Control under it' }))
+    }
+    # Stop-ScheduledTask ends the wrapper; make sure nothing it started is left holding the registration.
+    foreach ($p in @($c.task)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($force) { foreach ($p in @($c.hand)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue; $notes.Add("stopped hand-started copy pid $($p.ProcessId)") } }
+    Start-Sleep -Seconds 2
+    try {
+        Start-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop
+        $notes.Add('started the task')
+    } catch {
+        $info = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+        $notes.Add("task start refused: $($_.Exception.Message.Trim()) (last result 0x$('{0:X8}' -f [int]$info.LastTaskResult))")
+    }
+    for ($i = 0; $i -lt 6 -and -not (Test-RcUp $task); $i++) { Start-Sleep -Seconds 5 }
+    if (Test-RcUp $task) { return @{ ok = $true; notes = $notes } }
+
+    $a = @($task.Actions)[0]
+    if ($a -and $a.Execute) {
+        try {
+            $sp = @{ FilePath = $a.Execute; WindowStyle = 'Hidden'; ErrorAction = 'Stop' }
+            if ($a.Arguments)        { $sp.ArgumentList = $a.Arguments }
+            if ($a.WorkingDirectory) { $sp.WorkingDirectory = $a.WorkingDirectory }
+            Start-Process @sp
+            $notes.Add('started the task command directly')
+        } catch { $notes.Add("direct start failed: $($_.Exception.Message.Trim())") }
+        for ($i = 0; $i -lt 6 -and -not (Test-RcUp $task); $i++) { Start-Sleep -Seconds 5 }
+        if (Test-RcUp $task) { return @{ ok = $true; notes = $notes } }
+    }
+    return @{ ok = $false; notes = $notes }
+}
+
+$rcOutside = $false
+$task = Get-ScheduledTask -TaskName $rcTaskName -ErrorAction SilentlyContinue
+$copies = Get-RcCopies $task
+if (-not $task) {
+    $rcState = if ($copies.hand) { 'Up' } else { 'Task missing' }
+    $lines.Add('Remote Control: task missing (re-run install.ps1)' + $(if ($copies.hand) { ', running by hand' } else { '' }))
+} elseif ($kick -or -not ($copies.task -or $copies.hand)) {
+    if ($kick) { Log 'Restart requested from the health issue.'; $lines.Add('Remote Control: restart requested from GitHub') }
+    $r = Restart-RemoteControl $task $kick
+    $how = $r.notes -join '; '
+    if ($r.ok) {
+        $rcState = 'Restarted'
+        Log "Remote Control restarted ($how)."
+        $lines.Add("Remote Control: restarted just now ($how)")
+    } else {
+        $rcState = 'Down'   # existing red option in the Machine Health select
+        Log "Remote Control was down and did NOT come back: $how"
+        $lines.Add("Remote Control: DOWN, restart failed ($how). Run 'claude remote-control' in C:\Jarvis by hand.")
+    }
+} else {
+    $rcState = 'Up'
+    $desc = @()
+    if ($copies.task) { $desc += "task copy pid $(@($copies.task)[0].ProcessId)" }
+    if ($copies.hand) { $desc += "hand-started pid $(@($copies.hand.ProcessId) -join ', ')" }
+    $lines.Add("Remote Control: UP ($($desc -join '; '))")
+    if (-not $copies.task) {
+        # Only a hand copy: it dies with its terminal, so bring the task's copy back alongside it (never stop it).
+        $r = Restart-RemoteControl $task $false
+        $after = Get-RcCopies $task
+        if ($after.task) { $lines.Add("  also started the task's copy ($($r.notes -join '; '))"); Log "Only a hand-started Remote Control was up; started the task's copy too." }
+        else { $rcOutside = $true }
+    }
+}
+# Keep Remote Control ahead of heavy jobs (docker pulls in WSL, model runs) so a busy PC doesn't drop its
+# connection: Remote Control and the sessions it spawns get AboveNormal priority. Memory goes on the snapshot,
+# so a drop under memory pressure shows up on the row.
+$memAlert = $null
+$rcNow = Get-RcCopies $task
+$rcIds = @(@($rcNow.task) + @($rcNow.hand) | ForEach-Object { [int]$_.ProcessId })
+if ($rcIds -and -not $DryRun) {
+    $rcTree = @($rcIds) + @(Get-Descendants $rcIds $rcNow.all | ForEach-Object { [int]$_.ProcessId })
+    foreach ($id in ($rcTree | Select-Object -Unique)) {
+        try { $p = Get-Process -Id $id -ErrorAction Stop; if ($p.PriorityClass -eq 'Normal') { $p.PriorityClass = 'AboveNormal' } } catch { }
+    }
+}
+try {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $freeGb = [Math]::Round($os.FreePhysicalMemory / 1MB, 1); $totGb = [Math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+    $wsl = @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum
+    $lines.Add("Memory: $freeGb GB free of $totGb GB" + $(if ($wsl) { ", WSL using $([Math]::Round($wsl / 1GB, 1)) GB" } else { '' }))
+    if ($totGb -gt 0 -and $freeGb / $totGb -lt 0.07) { $memAlert = ("Low memory: $freeGb GB free of $totGb GB" + $(if ($wsl) { " (WSL $([Math]::Round($wsl / 1GB, 1)) GB)" } else { '' }) + '; Remote Control may drop') }
+} catch { }
+# Remote Control's own output: the homebase task redirects it to C:\Jarvis\logs\remote-control.log; installs from
+# install.ps1 write a --debug-file into this folder.
+$rcDebug = @((Join-Path (Split-Path $root -Parent) 'logs\remote-control.log'), (Join-Path $logDir 'remote-control-debug.log')) |
+    Where-Object { Test-Path $_ } | Sort-Object { (Get-Item $_).LastWriteTime } -Descending | Select-Object -First 1
+if (-not $rcDebug) { $rcDebug = Join-Path $logDir 'remote-control-debug.log' }
+if ($rcState -eq 'Down' -and (Test-Path $rcDebug)) {
+    # Whatever Remote Control last wrote before it quit, so the reason is on the row without opening the PC.
+    $lw = (Get-Item $rcDebug).LastWriteTime
+    $lines.Add("  RC debug log last written $($lw.ToString('MM/dd HH:mm')), tail:")
+    Get-Content $rcDebug -Tail 4 -ErrorAction SilentlyContinue | ForEach-Object {
+        $l = (Redact $_).Trim(); $lines.Add('    ' + $l.Substring(0, [Math]::Min(200, $l.Length)))
+    }
+} elseif (Test-Path $rcDebug) {
     # Real problems only: skip the --verbose websocket traffic (it carries "is_error" etc.) and anything older than 30 min.
-    $bad = Select-String -Path $rcDebug -Pattern 'not trusted|requires a claude.ai|full-scope|not yet enabled|Enable Remote Control\?|trusted-device|could not|\[ERROR\]|failed' |
+    $bad = Get-Content $rcDebug -Tail 300 -ErrorAction SilentlyContinue | Select-String -Pattern 'not trusted|requires a claude.ai|full-scope|not yet enabled|Enable Remote Control\?|trusted-device|could not|\[ERROR\]|failed' |
         Where-Object { $_.Line -notmatch '\[bridge:ws\]|Error log sink' } |
         Where-Object { -not ($_.Line -match '^(\d{4}-\d\d-\d\dT[\d:.]+Z)') -or ((Get-Date) - [datetime]$Matches[1]).TotalMinutes -lt 30 } |
         Select-Object -Last 3
@@ -68,7 +233,7 @@ if (Test-Path $rcDebug) {
 }
 
 # --- 2. Listening ports ---------------------------------------------------------------
-$ports = if ($machine -eq 'rig') { @{ 'ollama' = 11434 } } else { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790 } }
+$ports = if ($machine -in 'rig', 'laptop') { @{ 'ollama' = 11434 } } else { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790 } }
 $portStatus = foreach ($k in $ports.Keys) {
     $up = Get-NetTCPConnection -State Listen -LocalPort $ports[$k] -ErrorAction SilentlyContinue
     "$k :$($ports[$k]) " + $(if ($up) { 'up' } else { 'DOWN' })
@@ -126,7 +291,9 @@ function Parse-ResetTime([string]$l, [datetime]$now) {
         $h = [int]$Matches[3] % 12; if ($Matches[5] -eq 'pm') { $h += 12 }
         $m = if ($Matches[4]) { [int]$Matches[4] } else { 0 }
         $r = $at.Date.AddHours($h).AddMinutes($m)
-        if ($r -lt $at) { $r = $r.AddDays(1) }
+        # A reset a few minutes before the log line is today's (the Worker logs with a pad); roll to tomorrow only
+        # when it is well in the past.
+        if ($r -lt $at.AddHours(-2)) { $r = $r.AddDays(1) }
         return $r
     }
     return $null
@@ -156,18 +323,10 @@ function Get-WorkerState([bool]$working, $pausedUntil, $waiting, $lastClaim, [da
     return 'Idle'
 }
 
-$token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'User')
-if (-not $token) { $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'Machine') }
-if (-not $token) { $token = $env:NOTION_TOKEN }
-$headers = @{ Authorization = "Bearer $token"; 'Notion-Version' = '2022-06-28' }
-function Invoke-Notion([string]$method, [string]$path, $body) {
-    $json = $body | ConvertTo-Json -Depth 12
-    Invoke-RestMethod -Method $method -Uri "https://api.notion.com/v1/$path" -Headers $headers -TimeoutSec 30 `
-        -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
-}
 
 $now         = Get-Date
 $alerts      = New-Object System.Collections.Generic.List[string]
+if ($memAlert) { $alerts.Add($memAlert) }
 $waiting     = $null
 $pausedUntil = $null
 $claimLogAt  = $null
@@ -176,42 +335,47 @@ $state       = Get-Content $statePath -Raw -ErrorAction SilentlyContinue | Conve
 $lastClaim   = if ($state -and $state.lastClaim) { [datetime]$state.lastClaim } else { $null }
 $lastTitle   = if ($state) { "$($state.lastTitle)" } else { '' }
 
-if ($token) {
+$waitingNames = @()
+
+# Waiting cards come from the GitHub tasks repo: open, status:approved, unclaimed, for this machine or any.
+# Claims come from the Worker's claim comments.
+$waiting = $null
+if (-not $ghTok) {
+    $alerts.Add('GITHUB_TASKS_TOKEN is not set; waiting cards unknown and health not reported')
+} else {
     try {
-        # Cards the Worker could run right now: Approved, auto-executable, unclaimed, for this machine or Any.
-        $q = Invoke-Notion Post "databases/$tasksDb/query" @{ page_size = 100; filter = @{ and = @(
-            @{ property = 'Status'; select = @{ equals = 'Approved' } },
-            @{ property = 'Auto-executable'; checkbox = @{ equals = $true } },
-            @{ property = 'Claimed by'; rich_text = @{ is_empty = $true } },
-            @{ or = @(@{ property = 'Machine'; select = @{ equals = $machine } }, @{ property = 'Machine'; select = @{ equals = 'Any' } }) }
-        ) } }
-        $waitingCards = @($q.results)
-        $waiting = $waitingCards.Count
+        $issues = @(); $page = 1
+        do {
+            $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=all&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30)
+            $issues += $batch; $page++
+        } while ($batch.Count -eq 100 -and $page -le 10)
+        $issues = @($issues | Where-Object { -not $_.pull_request })
+        $ghReady = @($issues | Where-Object {
+            $n = @($_.labels | ForEach-Object { $_.name })
+            $_.state -eq 'open' -and $n -contains 'status:approved' -and -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
+                ($n -contains 'machine:any' -or $n -contains "machine:$machine" -or -not @($n | Where-Object { $_ -like 'machine:*' }))
+        })
+        $waiting = $ghReady.Count
+        $waitingNames = @($ghReady | ForEach-Object { "#$($_.number) $($_.title)" })
 
-        # Newest claims by this machine (the Worker stamps "Claimed by" = "<machine> MM/dd HH:mm").
-        $c = Invoke-Notion Post "databases/$tasksDb/query" @{ page_size = 25
-            filter = @{ property = 'Claimed by'; rich_text = @{ starts_with = "$machine " } }
-            sorts  = @(@{ timestamp = 'last_edited_time'; direction = 'descending' }) }
-        foreach ($p in @($c.results)) {
-            $t = Parse-Stamp (Plain $p.properties.'Claimed by'.rich_text) $now
-            if ($t -and (-not $lastClaim -or $t -gt $lastClaim)) {
+        # Newest claim by this machine, and whether a run was logged after it.
+        $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30)
+        $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+        if ($claimC) {
+            $t = ([datetime]$claimC.created_at).ToLocalTime()
+            if (-not $lastClaim -or $t -gt $lastClaim) {
                 $lastClaim  = $t
-                $lastTitle  = Plain $p.properties.Task.title
-                $claimLogAt = Parse-Stamp (Plain $p.properties.'Agent log'.rich_text) $now
-            }
-        }
-
-        # A Worker that hit the usage limit writes "WAITING: usage resets MM/dd HH:mm" to the card.
-        foreach ($p in @($waitingCards) + @($c.results)) {
-            $log = Plain $p.properties.'Agent log'.rich_text
-            if ($log -match 'usage resets (\d\d/\d\d \d\d:\d\d)') {
-                $r = Parse-Stamp $Matches[1] $now
-                if ($r -and $r -gt $now -and (-not $pausedUntil -or $r -gt $pausedUntil)) { $pausedUntil = $r }
+                $num        = [int](($claimC.issue_url -split '/')[-1])
+                $lastTitle  = "#$num " + "$(($issues | Where-Object { $_.number -eq $num } | Select-Object -First 1).title)"
+                $claimLogAt = $null
+                $runC = $cm | Where-Object { $_.issue_url -eq $claimC.issue_url -and "$($_.body)" -match "jarvis:runmeta \{[^}]*`"machine`": `"$machine`"" } | Select-Object -First 1
+                if ($runC) { $claimLogAt = ([datetime]$runC.created_at).ToLocalTime() }
             }
         }
     } catch {
-        $alerts.Add('Could not read the Tasks board: ' + $_.Exception.Message)
-        Log "Tasks query failed: $($_.Exception.Message)"
+        $waiting = $null
+        $alerts.Add('Could not read the GitHub task queue: ' + $_.Exception.Message)
+        Log "GitHub queue query failed: $(Redact $_.Exception.Message)"
     }
 }
 foreach ($l in @($tail) + @($agentLines)) {
@@ -229,50 +393,77 @@ $recentTaskLog = $newest -and $newest.Name -like 'task-*' -and ($now - $newest.L
 $openClaim     = $lastClaim -and ($now - $lastClaim).TotalMinutes -lt 50 -and (-not $claimLogAt -or $claimLogAt -lt $lastClaim)
 $worker = Get-WorkerState ($workerTaskRunning -or $recentTaskLog -or $openClaim) $pausedUntil $waiting $lastClaim $now $idleAfterMin
 
+# The Worker's own heartbeat (homebase agent.py writes C:\Jarvis\worker.heartbeat): a worker line, "Working: ..." or
+# "IDLE-REASON: <code> <detail>", and a rig line, "Rig: ...". When it is fresh it is the truth about the Worker,
+# better than inferring idle from the card count.
+$hbPath   = Join-Path (Split-Path $root -Parent) 'worker.heartbeat'
+$hbWorker = $null
+$hbRig    = $null
+if ((Test-Path $hbPath) -and ($now - (Get-Item $hbPath).LastWriteTime).TotalMinutes -lt 20) {
+    foreach ($l in @(Get-Content $hbPath -ErrorAction SilentlyContinue)) {
+        $v = ($l -replace '^\s*(worker|rig)\s*[:=]\s*(?=(Working|IDLE-REASON|Rig)\b)', '').Trim()
+        if (-not $hbWorker -and $v -match '^(Working|IDLE-REASON)\b') { $hbWorker = $v }
+        elseif (-not $hbRig -and ($v -match '^Rig\b' -or $l -match '^\s*rig\s*[:=]')) { $hbRig = ($v -replace '^\s*rig\s*[:=]\s*', '') }
+    }
+}
+$hbIdle = $null
+if ($hbWorker -match '^Working\b') { $worker = 'Working' }
+elseif ($hbWorker -match '^IDLE-REASON:?\s*(.*)$') {
+    $hbIdle = $Matches[1].Trim()
+    if ($hbIdle -match '(?i)usage|session limit|rate.?limit') { $worker = 'Paused (usage limit)' }
+    elseif ($hbIdle -match '(?i)^(no[-_ ]?(cards|work)|queue[-_ ]?empty|nothing)') { $worker = 'Idle'; $hbIdle = $null }
+    elseif ($worker -ne 'Paused (usage limit)') { $worker = 'Idle with cards waiting' }
+}
+
 $claimText = if ($lastClaim) { $lastClaim.ToString('MM/dd HH:mm') } else { 'never' }
 $workerLine = "Worker: $worker"
 if ($worker -eq 'Paused (usage limit)') { $workerLine += " until $($pausedUntil.ToString('MM/dd HH:mm'))" }
 $workerLine += ", last claim $claimText"
 if ($lastTitle) { $workerLine += " ($lastTitle)" }
 $lines.Insert(1, $workerLine)
+if ($hbWorker) { $lines.Insert(2, "  heartbeat: $hbWorker") }
+if ($hbRig)    { $lines.Insert($(if ($hbWorker) { 3 } else { 2 }), "  Rig: $hbRig") }
 if ($null -ne $waiting) {
-    $names = @($waitingCards | Select-Object -First 3 | ForEach-Object { Plain $_.properties.Task.title })
-    $lines.Insert(2, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
+    $names = @($waitingNames | Select-Object -First 3)
+    $lines.Insert(2 + [int][bool]$hbWorker + [int][bool]$hbRig, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
 }
 
-if ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
-if ($worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
+if ($rcOutside) { $alerts.Add('Remote Control only running by hand (task copy not running); it stops if that terminal closes') }
+if ($rcState -eq 'Down') { $alerts.Insert(0, "Remote Control down, restart failed: run 'claude remote-control' in C:\Jarvis") }
+elseif ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
+if ($hbIdle -and $worker -ne 'Paused (usage limit)') { $alerts.Insert(0, "Worker idle: $hbIdle") }
+elseif (-not $hbWorker -and $worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
 if ($needsJake) { $alerts.Insert(0, "Needs Jake: $needsJake") }
 $portsDown = @($portStatus | Where-Object { $_ -like '*DOWN' })
 if ($portsDown) { $alerts.Add('Down: ' + (($portsDown | ForEach-Object { ($_ -split ' :')[0] }) -join ', ')) }
 
-# --- 6. Write this machine's health row -----------------------------------------------
-function RT([string]$s) {
-    if (-not $s) { return , @() }
-    if ($s.Length -gt 1990) { $s = $s.Substring(0, 1990) }
-    return , @(@{ type = 'text'; text = @{ content = $s } })
-}
-function NDate($d) { if ($d) { @{ start = $d.ToString('yyyy-MM-ddTHH:mm:sszzz') } } else { $null } }
-
+# --- 6. Write this machine's health issue ---------------------------------------------
 $snapshot = ($lines -join "`n")
-$props = [ordered]@{
-    'Last check-in'     = @{ date = (NDate $now) }
-    'Remote Control'    = @{ select = @{ name = $rcState } }
-    'Worker'            = @{ select = @{ name = $worker } }
-    'Waiting cards'     = @{ number = $waiting }
-    'Last claim'        = @{ date = (NDate $lastClaim) }
-    'Last claimed card' = @{ rich_text = (RT $lastTitle) }
-    'Alert'             = @{ rich_text = (RT ($alerts -join '; ')) }
-    'Snapshot'          = @{ rich_text = (RT $snapshot) }
+$fields = [ordered]@{
+    'Remote Control'    = $rcState
+    'Worker'            = $worker
+    'Waiting cards'     = $(if ($null -ne $waiting) { $waiting } else { 'unknown' })
+    'Last claim'        = $claimText
+    'Last claimed card' = $lastTitle
 }
-$row = $healthRows[$machine]
+$body = @("**Last check-in:** $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss+00:00'))", '')
+if ($alerts.Count) { $body += @('> [!WARNING]', ('> ' + ($alerts -join '; ')), '') }
+$body += @('| | |', '|---|---|') + @($fields.Keys | ForEach-Object { "| $_ | $("$($fields[$_])".Replace('|', '/')) |" })
+$tail5k = $snapshot.Trim(); if ($tail5k.Length -gt 5000) { $tail5k = $tail5k.Substring($tail5k.Length - 5000) }
+$body += @('', '```', $tail5k.Replace('```', "'''"), '```')
+$title = "Health: $machine" + $(if ($worker) { " - $worker" } else { '' })
+$labels = @('health') + @($(if ($myHealth) { $myHealth.labels | ForEach-Object { $_.name } }) |
+    Where-Object { $_ -notin @('health', 'health:alert', $kickLabel) }) + @($(if ($alerts.Count) { 'health:alert' }))
+$update = @{ title = $title; body = ($body -join "`n"); labels = @($labels | Where-Object { $_ }) }
 if ($DryRun) {
-    @{ row = $row; properties = $props } | ConvertTo-Json -Depth 12
-} elseif ($token -and $row) {
-    try { Invoke-Notion Patch "pages/$row" @{ properties = $props } | Out-Null }
-    catch { Log "Notion health update failed: $($_.Exception.Message)" }
+    $update | ConvertTo-Json -Depth 5
+} elseif ($ghTok) {
+    try {
+        if ($myHealth) { Invoke-GH Patch "issues/$($myHealth.number)" $update | Out-Null }
+        else { Invoke-GH Post 'issues' $update | Out-Null }
+    } catch { Log "GitHub health update failed: $(Redact $_.Exception.Message)" }
 } else {
-    Log "No NOTION_TOKEN or unknown machine '$machine'; health row not updated."
+    Log 'No GITHUB_TASKS_TOKEN; health issue not updated.'
 }
 $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding UTF8
 
@@ -282,7 +473,7 @@ $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding 
 # "Remote Control restarted" alone is not pushed: the watchdog already fixed it.
 $notifyUrls = @('http://127.0.0.1:8770/api/notify', 'http://127.0.0.1:8765/api/notify')
 function Send-Push([string]$title, [string]$text) {
-    $json = @{ title = $title; body = $text; message = $text; tag = 'jarvis-health'; url = 'https://app.notion.com/p/2e1df4a5efd6402689c5e67ee1691954' } | ConvertTo-Json
+    $json = @{ title = $title; body = $text; message = $text; tag = 'jarvis-health'; url = "https://github.com/$ghRepo/issues?q=is%3Aopen+label%3Ahealth" } | ConvertTo-Json
     foreach ($u in $notifyUrls) {
         try {
             Invoke-RestMethod -Method Post -Uri $u -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 10 | Out-Null
@@ -296,22 +487,22 @@ if ($TestPush) {
     if (Send-Push 'Jarvis test' "Test push from the $machine watchdog") { 'Push sent.' } else { "Push failed; see $log" }
     return
 }
-if ($machine -eq 'homebase' -and $token -and -not $DryRun) {
+if ($machine -eq 'homebase' -and $ghTok -and -not $DryRun) {
     $pushPath = Join-Path $root 'pushed.json'
     $pushed = @{}
     $prev = Get-Content $pushPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
     if ($prev) { $prev.PSObject.Properties | ForEach-Object { $pushed[$_.Name] = "$($_.Value)" } }
     $current = @{ homebase = ($alerts -join '; ') }
     try {
-        $rp = Invoke-RestMethod -Method Get -Uri "https://api.notion.com/v1/pages/$($healthRows['rig'])" -Headers $headers -TimeoutSec 30
-        $rigAlert = Plain $rp.properties.Alert.rich_text
-        $rigSeen  = $rp.properties.'Last check-in'.date.start
-        $rigWait  = $rp.properties.'Waiting cards'.number
+        $rb = "$((Get-HealthIssue 'rig').body)"
+        $rigAlert = if ($rb -match '(?m)^> (?!\[!WARNING\])(.+)$') { $Matches[1].Trim() } else { '' }
+        $rigSeen  = if ($rb -match '\*\*Last check-in:\*\* (\S+)') { $Matches[1] } else { $null }
+        $rigWait  = if ($rb -match '(?m)^\| Waiting cards \| (\d+) \|') { [int]$Matches[1] } else { 0 }
         if ($rigSeen -and ($now - [datetime]$rigSeen).TotalMinutes -gt 30 -and $rigWait -gt 0) {
             $rigAlert = "Offline since $(([datetime]$rigSeen).ToString('MM/dd HH:mm')) with $rigWait cards waiting"
         }
         $current['rig'] = $rigAlert
-    } catch { Log "Reading the rig row failed: $($_.Exception.Message)" }
+    } catch { Log "Reading the rig health issue failed: $($_.Exception.Message)" }
     foreach ($m in @($current.Keys)) {
         $a = "$($current[$m])"
         $worth = ($a -split '; ' | Where-Object { $_ -and $_ -ne 'Remote Control restarted' })

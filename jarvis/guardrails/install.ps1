@@ -1,7 +1,7 @@
 # Jarvis guardrails installer: run once on homebase (and the rig if Claude works there too).
 # In a normal PowerShell window, paste:
 #
-#   irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/guardrails/install.ps1 | iex
+#   $t=[Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN','User'); irm -Headers @{Authorization="Bearer $t"; Accept='application/vnd.github.raw'} 'https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/guardrails/install.ps1?ref=claude/eager-knuth-lakcxt' | iex
 #
 # What it does:
 #   - puts GUARDRAILS.md, policy.json and training_intake.py in C:\Jarvis\guardrails
@@ -12,13 +12,16 @@
 
 $ErrorActionPreference = 'Stop'
 $ref  = if ($env:JARVIS_REF) { $env:JARVIS_REF } else { 'claude/eager-knuth-lakcxt' }
-$base = "https://raw.githubusercontent.com/flanneryjake/Flow/$ref/jarvis/guardrails"
 $dir  = 'C:\Jarvis\guardrails'
 function Say([string]$m, [string]$c = 'Cyan') { Write-Host $m -ForegroundColor $c }
 
 New-Item -ItemType Directory -Force -Path $dir, 'C:\Jarvis\training\_log' | Out-Null
+# Flow is private, so files come through the contents API with Jake's GITHUB_TASKS_TOKEN.
+$tok = if ($env:GITHUB_TASKS_TOKEN) { $env:GITHUB_TASKS_TOKEN } else { [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User') }
+$h = @{ Accept = 'application/vnd.github.raw'; 'User-Agent' = 'jarvis-installer' }
+if ($tok) { $h.Authorization = "Bearer $tok" }
 foreach ($f in 'GUARDRAILS.md', 'policy.json', 'training_intake.py') {
-    Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile (Join-Path $dir $f)
+    Invoke-WebRequest -UseBasicParsing -Headers $h "https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/guardrails/$f`?ref=$ref" -OutFile (Join-Path $dir $f)
 }
 Say "Guardrail files are in $dir"
 
