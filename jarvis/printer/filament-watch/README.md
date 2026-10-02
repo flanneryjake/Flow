@@ -24,7 +24,7 @@ but it can't tell "250 g left" from "150 g left". The scale can.
 - `Filament left` = scale reading - `Empty spool weight` (default 230 g, change it per brand in HA).
 - Short = printing and left < needs + `Filament safety margin` (default 25 g), held for 2 minutes so a tug on the
   spool doesn't trigger it.
-- Short and `person.jake` is anything but `home` (away, or unknown) -> pause + alert. Short and home -> alert only.
+- Short and `person.jake_flannery` is anything but `home` (away, or unknown) -> pause + alert. Short and home -> alert only.
 - `input_boolean.filament_watch` turns the whole thing off.
 
 ## Setup
@@ -50,14 +50,14 @@ but it can't tell "250 g left" from "150 g left". The scale can.
    ff_pause_body: '{"serialNumber":"SNxxxx","checkCode":"xxxxxxxx","payload":{"cmd":"jobCtl_cmd","args":{"jobID":"","action":"pause"}}}'
    ```
 
-7. **Presence:** Home Assistant app on Jake's phone, location "Always", and the phone attached to `person.jake`
-   (Settings > People).
+7. **Presence:** Home Assistant app on Jake's phone, location "Always", and the phone attached to `person.jake_flannery`
+   (Settings > People; it is `person.jake_flannery`, tracker `device_tracker.iphone`).
 8. Copy `packages/filament_watch.yaml` into `<HA config>/packages/`, check the config, restart HA.
 
 ## Test without wasting filament
 
 Start any print, then set `Empty spool weight` to a number above the scale reading (so `Filament left` drops to 0).
-Within about 3 minutes: home -> heads-up only; set `person.jake` away (or turn the phone's location off) -> the
+Within about 3 minutes: home -> heads-up only; set `person.jake_flannery` away (or turn the phone's location off) -> the
 printer pauses and the alert arrives. Put the empty weight back and resume on the printer.
 
 This doesn't touch `C:\Jarvis\printer` (the print service); it only sends the printer's own pause command.
