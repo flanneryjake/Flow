@@ -24,7 +24,8 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir 'watchdog.log'
 if ((Test-Path $log) -and (Get-Item $log).Length -gt 1MB) { Move-Item $log "$log.old" -Force }
 function Log([string]$m) { "$(Get-Date -Format 'MM/dd HH:mm:ss') $m" | Add-Content -Path $log }
-function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-|ghp_|github_pat_)[A-Za-z0-9_\-]{16,}', '<redacted>' }
+# Notion, Anthropic, GitHub and Gemini keys, and JWTs such as Home Assistant long-lived tokens.
+function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-|ghp_|github_pat_)[A-Za-z0-9_\-]{16,}|AIza[A-Za-z0-9_\-]{30,}|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+', '<redacted>' }
 
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("$(Get-Date -Format 'MM/dd HH:mm') $machine watchdog")
@@ -152,7 +153,7 @@ function Restart-RemoteControl($task, [bool]$force) {
         $notes.Add('started the task')
     } catch {
         $info = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
-        $notes.Add("task start refused: $($_.Exception.Message.Trim()) (last result 0x$('{0:X8}' -f [int]$info.LastTaskResult))")
+        $notes.Add("task start refused: $($_.Exception.Message.Trim()) (last result 0x$('{0:X8}' -f [uint32]$info.LastTaskResult))")
     }
     for ($i = 0; $i -lt 6 -and -not (Test-RcUp $task); $i++) { Start-Sleep -Seconds 5 }
     if (Test-RcUp $task) { return @{ ok = $true; notes = $notes } }
