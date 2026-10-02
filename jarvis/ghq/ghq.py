@@ -128,15 +128,30 @@ def api(method, path, body=None):
     return request(method, path, body)[1]
 
 
+_PAGE_CACHE = {}  # url -> (etag, data): repeat list calls send If-None-Match; a 304 is free and returns this
+
+
 def paged(path):
-    """GET every page of a list endpoint."""
+    """GET every page of a list endpoint. Each page is re-fetched with If-None-Match, so an unchanged list
+    costs nothing against the rate limit (304s are free)."""
     # Numbered pages rather than the Link header: GitHub's "next" links use /repositories/<id>/ paths,
     # which some proxies refuse.
     path = re.sub(r'([?&])per_page=\d+&?', r'\1', path).rstrip('?&')
     sep = '&' if '?' in path else '?'
     out, page = [], 1
     while True:
-        data = request('GET', f'{path}{sep}per_page=100&page={page}')[1] or []
+        url = f'{path}{sep}per_page=100&page={page}'
+        etag, cached = _PAGE_CACHE.get(url, (None, None))
+        status, data, headers = request('GET', url, etag=etag)
+        if status == 304 and cached is not None:
+            data = cached
+        else:
+            data = data or []
+            tag = headers.get('ETag') or headers.get('etag')
+            if tag:
+                if len(_PAGE_CACHE) > 500:
+                    _PAGE_CACHE.clear()
+                _PAGE_CACHE[url] = (tag, data)
         out.extend(data)
         if len(data) < 100:
             return out
@@ -183,8 +198,15 @@ def comment(number, text):
     return api('POST', repo_path(f'/issues/{number}/comments'), {'body': text})
 
 
-def wake():
-    """Nudge each Worker over the tailnet. Best effort: polling still picks the card up if this fails."""
+_LAST_WAKE = [0.0]
+
+
+def wake(force=False):
+    """Nudge each Worker over the tailnet. Best effort: polling still picks the card up if this fails.
+    At most once a minute unless force (Jake's `now` cards always wake at once)."""
+    if not force and time.time() - _LAST_WAKE[0] < 60:
+        return
+    _LAST_WAKE[0] = time.time()
     for url in filter(None, (u.strip() for u in os.environ.get('JARVIS_WAKE_URLS', '').split(','))):
         try:
             urllib.request.urlopen(urllib.request.Request(url, data=b'{}', method='POST',
@@ -264,9 +286,20 @@ def ready(machine, use_etag_file=None):
 
 
 def now_waiting(machine, use_etag_file=None):
-    """The oldest `now` card this machine may run, or None. Cheap enough to call every 15 s while a card runs
-    (with an ETag file an unchanged queue is a free 304)."""
-    cards = [c for c in ready(machine, use_etag_file) if c['now']]
+    """The oldest `now` card this machine may run, or None. Reads only approved `now` cards (one small page,
+    re-fetched with If-None-Match), so it is cheap to call every 15-90 s while a card runs. use_etag_file is
+    accepted for older callers and ignored."""
+    if not fleet_allows(machine):
+        return None
+    cards = []
+    for i in paged(repo_path('/issues?state=open&labels=status:approved,now&sort=created&direction=asc')):
+        names = label_names(i)
+        if i.get('pull_request') or any(n.startswith('claimed:') for n in names):
+            continue
+        if not ({'machine:any', f'machine:{machine}'} & set(names)) and any(n.startswith('machine:') for n in names):
+            continue
+        cards.append({'number': i['number'], 'title': i['title'], 'labels': names, 'now': True,
+                      'priority': 0, 'created_at': i['created_at']})
     return cards[0] if cards else None
 
 
@@ -868,7 +901,7 @@ def jake_now(title, body='', machine='homebase'):
     number = new_card(title, body or title, machine=machine, priority='p0', status='approved',
                       extra_labels=['now'])
     comment(number, f'Typed by Jake for right now at {now_iso()}')
-    wake()
+    wake(force=True)
     return number
 
 
@@ -1055,7 +1088,7 @@ def main(argv=None):
             for t in usage(a.days):
                 print(f"#{t['number']:<5} {t['minutes']:7.1f} min  {t['runs']} runs  {t['outcomes']}")
         elif a.cmd == 'wake':
-            wake()
+            wake(force=True)
         elif a.cmd == 'now':
             n = jake_now(a.title, a.body, a.machine)
             print(f'#{n} https://github.com/{REPO}/issues/{n}')
