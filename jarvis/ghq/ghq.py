@@ -227,7 +227,7 @@ def ready(machine, use_etag_file=None):
     nothing against the API rate limit. Polling every 60 s is fine either way."""
     if not fleet_allows(machine):
         return []  # paused or disconnected from the phone app's Fleet panel (fleet/fleet.py)
-    path = repo_path('/issues?state=open&labels=status:approved&per_page=100&sort=created&direction=asc')
+    path = repo_path('/issues?state=open&labels=status:approved&sort=created&direction=asc')
     cache = {}
     if use_etag_file and os.path.exists(use_etag_file):
         try:
@@ -235,12 +235,13 @@ def ready(machine, use_etag_file=None):
                 cache = json.load(f)
         except ValueError:
             cache = {}
-    status, data, headers = request('GET', path, etag=cache.get('etag'))
-    if status == 304:
+    status, data, headers = request('GET', f'{path}&per_page=100&page=1', etag=cache.get('etag'))
+    if status == 304 and len(cache.get('data', [])) < 100:
+        # The ETag only covers page 1, so a 304 is trusted only when the whole queue fits on that page.
         data = cache.get('data', [])
     else:
         etag = headers.get('ETag') or headers.get('etag')
-        if len(data) >= 100:
+        if status == 304 or len(data or []) >= 100:
             # More than one page: page 1's ETag can't vouch for the later pages, so read them all and don't
             # cache an ETag (every poll re-reads until the queue is back under 100).
             data = paged(path)
