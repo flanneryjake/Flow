@@ -7,33 +7,35 @@ Everything here has the home PC connect *out* instead:
 
 - **Remote Control** (`claude remote-control`) dials out to claude.ai, so the PC shows up as a session in the
   Claude app and can take work from the phone or the cloud.
-- **Watchdog** (every 5 min) restarts Remote Control when it dies (it exits after ~10 min offline) and writes the
-  machine's row in the Notion **🩺 Machine Health** table (under Jarvis Command Center), so a stall shows up in
-  Notion instead of going silent.
+- **Watchdog** (every 5 min) restarts Remote Control when it dies (it exits after ~10 min offline) and rewrites the
+  machine's pinned **Health: <machine>** issue in the private repo `flanneryjake/jarvis-tasks`, so a stall shows up
+  there instead of going silent. (Until 2026-10-02 this was the Notion Machine Health table; Notion is retired.)
 
-## Machine Health table
+## Health issues
 
-| Column | Meaning |
+Each machine has one open issue labelled `health`, titled `Health: <machine> - <Worker state>`. The body starts with
+**Last check-in** (UTC); a check-in older than 15 min means the PC is off, asleep, or the watchdog stopped. The issue
+also carries `health:alert` while there is an alert.
+
+| Field | Meaning |
 | --- | --- |
-| Health | 🟢 OK, 🟠 plus the alert, or 🔴 Offline once the last check-in is over 15 min old (a Notion formula, so it works even when the PC is off) |
 | Remote Control | Up, Restarted (was down, watchdog brought it back), **Down** (still down after every restart step; the alert says "restart failed" and is pushed to the phone), Task missing |
 | Worker | Working, Idle, **Idle with cards waiting**, Paused (usage limit), Unknown |
-| Waiting cards | Approved + Auto-executable cards for this machine or Any with nothing in `Claimed by`. On a PC whose Worker reads GitHub (`JARVIS_QUEUE=github`): open `status:approved` issues with no `claimed:*` label for this machine or any, plus Notion cards still Approved that have no GitHub copy |
-| Last claim / Last claimed card | Newest `Claimed by` stamp this machine wrote on the Tasks board |
-| Alert | Why the row isn't green |
-| Snapshot | Full text: Remote Control, ports, Jarvis scheduled tasks, tail of the newest Worker log |
+| Waiting cards | Open `status:approved` issues with no `claimed:*` label for this machine, `machine:any`, or no machine label |
+| Last claim / Last claimed card | Newest `jarvis:claim` comment this machine posted |
+| Alert (warning box) | Why the machine isn't OK |
+| Snapshot (code block) | Full text: Remote Control, ports, Jarvis scheduled tasks, tail of the newest Worker log |
 
-The flag the table exists for: **Idle with cards waiting** means approved cards are sitting unclaimed, the Worker isn't
-running, and nothing has been claimed for 15 min. If the Worker's last log says `WAITING: usage resets ...`, the row shows
-Paused until that time instead. The rig is allowed to sleep, so a red rig row usually just means it's asleep.
+The flag this exists for: **Idle with cards waiting** means approved cards are sitting unclaimed, the Worker isn't
+running, and nothing has been claimed for 15 min. If the Worker's last log says `WAITING: usage resets ...`, the issue
+shows Paused until that time instead. The rig is allowed to sleep, so a stale rig check-in usually just means it's asleep.
 
-The Alert column also shows **Needs Jake: ...** when the Worker logged a "needs Jake:" line in the last 12 h, so
-anything waiting on you is on the row.
+The alert also shows **Needs Jake: ...** when the Worker logged a "needs Jake:" line in the last 12 h.
 
-**Phone alerts:** the homebase watchdog pushes to your phone through the hub's `/api/notify` (web push) when either
-row's alert changes to something new, and when the rig has been quiet for 30+ min while it has approved cards waiting.
-A lone "Remote Control restarted" isn't pushed, since the watchdog already fixed it. If homebase itself goes down,
-nothing can push; its row still turns red in Notion. Check the push path with
+**Phone alerts:** the homebase watchdog pushes to your phone through the hub's `/api/notify` (web push) when its own or
+the rig's alert changes to something new (it reads the rig's health issue), and when the rig has been quiet for 30+ min
+while it has approved cards waiting. A lone "Remote Control restarted" isn't pushed, since the watchdog already fixed it.
+If homebase itself goes down, nothing can push; its check-in time just goes stale. Check the push path with
 `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -TestPush`.
 
 **How the Remote Control check works:** the task's copy is found through Task Scheduler (the running task's process
@@ -42,14 +44,15 @@ command lines. A copy typed into a terminal is found by its command line. Remote
 running; if only a hand-started copy is up, the watchdog starts the task's copy alongside it and leaves the hand copy
 alone. If nothing is up, it stops a task run that has no Remote Control under it (Task Scheduler otherwise refuses a
 new start with 0x800710E0), starts the task, and if that fails starts the task's command directly. What it did is in
-`logs\watchdog.log` and the row's Snapshot. Remote Control's own output is read from `C:\Jarvis\logs\remote-control.log`
-(or the installer's debug log), and its last lines go on the row when a restart fails.
+`logs\watchdog.log` and the health issue's snapshot. Remote Control's own output is read from `C:\Jarvis\logs\remote-control.log`
+(or the installer's debug log), and its last lines go on the health issue when a restart fails.
 
-**Remote restart:** tick **Restart Remote Control** on a machine's Machine Health row (from your phone, or a cloud
-Claude session does it through Notion) and that machine's next watchdog run, within 5 minutes, restarts Remote Control
-even if its process still looks alive, then unticks the box. Use it when the Claude app shows the PC offline.
+**Remote restart:** add the label **restart-rc** to a machine's Health issue (from the GitHub app on your phone, or a
+cloud Claude session does it) and that machine's next watchdog run, within 5 minutes, restarts Remote Control even if
+its process still looks alive, then removes the label. Use it when the Claude app shows the PC offline. It kills any
+live Remote Control session on that PC, so only use it when Remote Control is truly down.
 
-Test without writing to Notion: `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -DryRun`
+Test without writing anything: `powershell -File C:\Jarvis\watchdog\watchdog.ps1 -DryRun`
 
 Install once per machine, in a normal PowerShell window at that machine:
 
@@ -80,7 +83,7 @@ python helper\gemini_helper.py research "free OCR libraries for Python"
 
 A big job on homebase (docker pulls in WSL, a model run) can starve Remote Control of memory, CPU or network, and the
 connection drops even though the PC stays up. The watchdog raises Remote Control and the sessions it spawns to
-AboveNormal priority on every run, puts free memory and WSL's share on the row, and alerts "Low memory" under 7% free.
+AboveNormal priority on every run, puts free memory and WSL's share on the health issue, and alerts "Low memory" under 7% free.
 
 WSL2 can take up to half the RAM by default. To cap it, run this once in PowerShell. It keeps an existing
 `.wslconfig` and uses 40% of RAM and all but one core:
