@@ -173,6 +173,11 @@ def main():
         say('boot: Startup-folder entry "Jarvis SearXNG.cmd" written (plus docker restart policy unless-stopped)')
     except OSError as e:
         say(f'boot: could not write Startup entry: {e}')
+    if '--searxng-only' in sys.argv:   # Flow's jarvis/tars already searches local-first (JARVIS_SEARX_URL list)
+        with open(RESULT, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(out) + '\n')
+        print(f'\nwrote {RESULT}')
+        return 0
     # 3. TARS code
     pid, cl, script = find_live()
     tars_dir = os.environ.get('TARS_DIR') or (os.path.dirname(script) if script else r'C:\Jarvis\tars')

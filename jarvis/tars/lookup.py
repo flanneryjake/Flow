@@ -20,7 +20,10 @@ import subprocess
 import urllib.parse
 import urllib.request
 
-SEARX_URL = os.environ.get('JARVIS_SEARX_URL', 'http://100.90.201.22:8888').rstrip('/')
+# Local SearXNG on this laptop first (search-kit), then the backup laptop's over the tailnet.
+SEARX_URLS = [u.strip().rstrip('/') for u in os.environ.get(
+    'JARVIS_SEARX_URL', 'http://127.0.0.1:8888,http://100.90.201.22:8888').split(',') if u.strip()]
+SEARX_URL = SEARX_URLS[0]
 GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-flash-lite-latest']
 GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
 CLAUDE_TIMEOUT = int(os.environ.get('JARVIS_CLAUDE_TIMEOUT', '75'))
@@ -97,11 +100,21 @@ def direct(text):
 
 # ----------------------------------------------------------------------------- sources
 
+def _searx_json(query, timeout):
+    last = None
+    for base in ([SEARX_URL] + [u for u in SEARX_URLS if u != SEARX_URL]):
+        url = f'{base}/search?' + urllib.parse.urlencode({'q': query, 'format': 'json', 'safesearch': 1})
+        req = urllib.request.Request(url, headers={'User-Agent': 'jarvis-tars', 'Accept': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode('utf-8', 'replace'))
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise RuntimeError(f'no SearXNG answered: {last}')
+
+
 def searx(query, n=5, timeout=12):
-    url = f'{SEARX_URL}/search?' + urllib.parse.urlencode({'q': query, 'format': 'json', 'safesearch': 1})
-    req = urllib.request.Request(url, headers={'User-Agent': 'jarvis-tars', 'Accept': 'application/json'})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        data = json.loads(r.read().decode('utf-8', 'replace'))
+    data = _searx_json(query, timeout)
     lines = []
     for a in (data.get('answers') or [])[:2]:
         lines.append(f'Answer box: {a if isinstance(a, str) else a.get("answer", "")}'[:400])

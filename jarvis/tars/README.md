@@ -10,7 +10,7 @@
   Turns and memory older than `JARVIS_PERSONA_SINCE` (old Boston voice) are never fed to the model; the files stay as they are.
 - Live facts (`live.py`): sunrise/sunset are computed for Plymouth, MA; weather comes from the National Weather Service
   (api.weather.gov, free, no key). Both go into the context as a LIVE block, so no web search is needed.
-- Lookups (`lookup.py`): `LOOKUP:` runs SearXNG (`JARVIS_SEARX_URL`) and reads the top two pages, then Gemini, then
+- Lookups (`lookup.py`): `LOOKUP:` runs SearXNG (`JARVIS_SEARX_URL`, comma list: local search-kit first, then the backup laptop) and reads the top two pages, then Gemini, then
   `claude -p`; `ASK_CLAUDE:` goes to Claude. Spoken replies are capped at 2 sentences (Claude answers excepted).
 - Home (`home.py`): Home Assistant (packages/tars_home.yaml on the backup laptop) pushes a snapshot to `POST /ha`
   every 2 min (alarms, what's playing, listening switch, lights) plus its private webhook URL, kept in `ha.json`.
