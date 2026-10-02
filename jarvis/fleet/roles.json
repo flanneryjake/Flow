@@ -1,0 +1,17 @@
+{
+  "_about": "Who does what, in failover order. The first machine in a list that is active and checked in is the one serving that role; the next one takes over when it is disconnected or goes quiet. Edit this file to change the order, then re-run install-fleet.ps1 (or copy it to C:\\Jarvis\\fleet\\).",
+  "machines": {
+    "homebase": {"host": "desktop-5ve3c77", "computer": "DESKTOP-5VE3C77", "label": "Homebase"},
+    "rig":      {"host": "desktop-vllddm4", "computer": "DESKTOP-VLLDDM4", "label": "Rig"},
+    "laptop":   {"host": "laptop-4150egrs", "computer": "LAPTOP-4150EGRS", "label": "5060 laptop"}
+  },
+  "roles": {
+    "hub":       {"label": "Phone app + approvals", "order": ["homebase", "laptop"], "port": 8770,
+                  "note": "The laptop only covers this once a standby hub is installed there."},
+    "worker":    {"label": "Claude Worker (task cards)", "order": ["homebase", "rig", "laptop"],
+                  "note": "machine:any cards go to whichever Worker is active; cards pinned to one machine wait for it."},
+    "local-llm": {"label": "Local model (Ollama)", "order": ["rig", "laptop"], "port": 11434},
+    "printer":   {"label": "3D printer control", "order": ["homebase"],
+                  "note": "Tied to homebase; no standby."}
+  }
+}

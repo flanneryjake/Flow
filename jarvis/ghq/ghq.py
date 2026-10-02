@@ -10,7 +10,7 @@ used for an instant nudge: after an approval, `approve` POSTs to each Worker's /
 so the card starts at once instead of on the next poll.
 
 Standard library only (Python 3.8+). Config comes from environment variables:
-  GITHUB_TASKS_TOKEN  fine-grained token limited to the tasks repo (Issues: read/write, Metadata: read)
+  GITHUB_TASKS_TOKEN  fine-grained token: tasks repo (Issues: read/write, Metadata: read), plus Flow (Contents: read) for the installers
   JARVIS_TASKS_REPO   owner/name, default flanneryjake/jarvis-tasks
   JARVIS_WAKE_URLS    optional, comma-separated, e.g. http://homebase:8790/wake,http://rig:8790/wake
 
@@ -216,6 +216,8 @@ def ready(machine, use_etag_file=None):
 
     With use_etag_file, the list is cached and re-fetched with If-None-Match, so an unchanged queue costs
     nothing against the API rate limit. Polling every 60 s is fine either way."""
+    if not fleet_allows(machine):
+        return []  # paused or disconnected from the phone app's Fleet panel (fleet/fleet.py)
     path = repo_path('/issues?state=open&labels=status:approved&per_page=100&sort=created&direction=asc')
     cache = {}
     if use_etag_file and os.path.exists(use_etag_file):
@@ -255,6 +257,20 @@ def now_waiting(machine, use_etag_file=None):
     (with an ETag file an unchanged queue is a free 304)."""
     cards = [c for c in ready(machine, use_etag_file) if c['now']]
     return cards[0] if cards else None
+
+
+def fleet_allows(machine):
+    """False when the Fleet panel has this machine paused or disconnected. True if fleet.py isn't installed."""
+    for p in (os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fleet'), r'C:\Jarvis\fleet'):
+        if os.path.exists(os.path.join(p, 'fleet.py')):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+            break
+    try:
+        import fleet
+    except ImportError:
+        return True
+    return fleet.may_take_cards(machine)
 
 
 def claim(number, machine):

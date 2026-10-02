@@ -1,7 +1,7 @@
 # Jarvis Always-On installer: run ONCE per machine (homebase first, then the rig).
 # In a normal (non-admin) PowerShell window on that machine, paste:
 #
-#   irm https://raw.githubusercontent.com/flanneryjake/Flow/main/jarvis/install.ps1 | iex
+#   $t=[Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN','User'); if(!$t){$t=Read-Host 'GitHub token'; [Environment]::SetEnvironmentVariable('GITHUB_TASKS_TOKEN',$t,'User')}; irm -Headers @{Authorization="Bearer $t"; Accept='application/vnd.github.raw'} 'https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/install.ps1?ref=claude/eager-knuth-lakcxt' | iex
 #
 # What it does:
 #   - updates Claude Code and runs `claude remote-control` once in a visible window so you can answer the
@@ -12,7 +12,16 @@
 #   - homebase only: never sleep on AC power, lid close does nothing on AC
 
 $ErrorActionPreference = 'Stop'
-$base = 'https://raw.githubusercontent.com/flanneryjake/Flow/main/jarvis'
+$flowRef = 'claude/eager-knuth-lakcxt'
+# Flow is private, so files come through the GitHub API with this user's GITHUB_TASKS_TOKEN
+# (the token needs Contents: Read-only on flanneryjake/Flow).
+function Get-FlowFile([string]$path, [string]$out) {
+    $tok = if ($env:GITHUB_TASKS_TOKEN) { $env:GITHUB_TASKS_TOKEN } else { [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User') }
+    $h = @{ Accept = 'application/vnd.github.raw'; 'User-Agent' = 'jarvis-installer' }
+    if ($tok) { $h.Authorization = "Bearer $tok" }
+    try { Invoke-WebRequest -UseBasicParsing -Headers $h "https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/$path`?ref=$flowRef" -OutFile $out }
+    catch { throw "Could not download jarvis/$path from Flow ($_). Check that GITHUB_TASKS_TOKEN can read flanneryjake/Flow." }
+}
 
 function Say([string]$m, [string]$c = 'Cyan') { Write-Host $m -ForegroundColor $c }
 $results = [ordered]@{}
@@ -21,9 +30,10 @@ $results = [ordered]@{}
 switch ($env:COMPUTERNAME.ToUpper()) {
     'DESKTOP-5VE3C77' { $machine = 'homebase' }
     'DESKTOP-VLLDDM4' { $machine = 'rig' }
+    'LAPTOP-4150EGRS' { $machine = 'laptop' }
     default {
-        $machine = (Read-Host "Is this 'homebase' or 'rig'? (computer name $env:COMPUTERNAME)").Trim().ToLower()
-        if ($machine -notin 'homebase', 'rig') { throw "Unknown machine '$machine'." }
+        $machine = (Read-Host "Is this 'homebase', 'rig' or 'laptop'? (computer name $env:COMPUTERNAME)").Trim().ToLower()
+        if ($machine -notin 'homebase', 'rig', 'laptop') { throw "Unknown machine '$machine'." }
     }
 }
 $workDir = if ($machine -eq 'homebase') { 'C:\Jarvis' } else { "$env:USERPROFILE\Desktop\Claude" }
@@ -45,7 +55,7 @@ foreach ($v in 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_T
 }
 
 # --- Watchdog script -----------------------------------------------------------------
-Invoke-WebRequest -UseBasicParsing "$base/watchdog.ps1" -OutFile (Join-Path $wdDir 'watchdog.ps1')
+Get-FlowFile "watchdog.ps1" (Join-Path $wdDir 'watchdog.ps1')
 $results['Watchdog script'] = "$wdDir\watchdog.ps1"
 
 # --- Notion token (for the health row) -- ------------------------------------------------
@@ -107,9 +117,11 @@ $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGo
     -MultipleInstances IgnoreNew
 
 # Remote Control keeps a hidden console (no output redirect), because without a terminal it refuses to start.
-$rcCmd = "Set-Location '$workDir'; claude remote-control --name '$machine' --permission-mode acceptEdits --verbose --debug-file '$logDir\remote-control-debug.log'"
+# Prefer npm's claude.cmd over its claude.ps1 shim, which won't load where the execution policy blocks scripts (the laptop).
+$claudeExe = if (Get-Command claude.cmd -ErrorAction SilentlyContinue) { 'claude.cmd' } else { 'claude' }
+$rcCmd = "Set-Location '$workDir'; $claudeExe remote-control --name '$machine' --permission-mode acceptEdits --verbose --debug-file '$logDir\remote-control-debug.log'"
 $rcAction = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $workDir `
-    -Argument "-NoProfile -WindowStyle Hidden -Command `"$rcCmd`""
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$rcCmd`""
 Register-ScheduledTask -TaskName 'Jarvis Remote Control' -Action $rcAction -Principal $principal -Settings $settings `
     -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $user) -Force | Out-Null
 

@@ -23,6 +23,7 @@ if (-not $machine) { $machine = $env:COMPUTERNAME }
 $healthRows = @{
     homebase = '3ea11c3639af816bbd70fd523fe28b81'
     rig      = '3ea11c3639af81b5af25cb91f2f88cdd'
+    laptop   = '3eb11c3639af81188552c1a198ebf5f6'
 }
 $tasksDb      = '7c1c59e927644dfba461c88a67dbd32c'   # Notion Tasks board
 $idleAfterMin = 15   # Worker counts as idle with cards waiting once nothing has been claimed for this long
@@ -197,6 +198,25 @@ if (-not $task) {
         else { $rcOutside = $true }
     }
 }
+# Keep Remote Control ahead of heavy jobs (docker pulls in WSL, model runs) so a busy PC doesn't drop its
+# connection: Remote Control and the sessions it spawns get AboveNormal priority. Memory goes on the snapshot,
+# so a drop under memory pressure shows up on the row.
+$memAlert = $null
+$rcNow = Get-RcCopies $task
+$rcIds = @(@($rcNow.task) + @($rcNow.hand) | ForEach-Object { [int]$_.ProcessId })
+if ($rcIds -and -not $DryRun) {
+    $rcTree = @($rcIds) + @(Get-Descendants $rcIds $rcNow.all | ForEach-Object { [int]$_.ProcessId })
+    foreach ($id in ($rcTree | Select-Object -Unique)) {
+        try { $p = Get-Process -Id $id -ErrorAction Stop; if ($p.PriorityClass -eq 'Normal') { $p.PriorityClass = 'AboveNormal' } } catch { }
+    }
+}
+try {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $freeGb = [Math]::Round($os.FreePhysicalMemory / 1MB, 1); $totGb = [Math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+    $wsl = @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum
+    $lines.Add("Memory: $freeGb GB free of $totGb GB" + $(if ($wsl) { ", WSL using $([Math]::Round($wsl / 1GB, 1)) GB" } else { '' }))
+    if ($totGb -gt 0 -and $freeGb / $totGb -lt 0.07) { $memAlert = ("Low memory: $freeGb GB free of $totGb GB" + $(if ($wsl) { " (WSL $([Math]::Round($wsl / 1GB, 1)) GB)" } else { '' }) + '; Remote Control may drop') }
+} catch { }
 # Remote Control's own output: the homebase task redirects it to C:\Jarvis\logs\remote-control.log; installs from
 # install.ps1 write a --debug-file into this folder.
 $rcDebug = @((Join-Path (Split-Path $root -Parent) 'logs\remote-control.log'), (Join-Path $logDir 'remote-control-debug.log')) |
@@ -222,7 +242,7 @@ if ($rcState -eq 'Down' -and (Test-Path $rcDebug)) {
 }
 
 # --- 2. Listening ports ---------------------------------------------------------------
-$ports = if ($machine -eq 'rig') { @{ 'ollama' = 11434 } } else { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790 } }
+$ports = if ($machine -in 'rig', 'laptop') { @{ 'ollama' = 11434 } } else { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790 } }
 $portStatus = foreach ($k in $ports.Keys) {
     $up = Get-NetTCPConnection -State Listen -LocalPort $ports[$k] -ErrorAction SilentlyContinue
     "$k :$($ports[$k]) " + $(if ($up) { 'up' } else { 'DOWN' })
@@ -280,7 +300,9 @@ function Parse-ResetTime([string]$l, [datetime]$now) {
         $h = [int]$Matches[3] % 12; if ($Matches[5] -eq 'pm') { $h += 12 }
         $m = if ($Matches[4]) { [int]$Matches[4] } else { 0 }
         $r = $at.Date.AddHours($h).AddMinutes($m)
-        if ($r -lt $at) { $r = $r.AddDays(1) }
+        # A reset a few minutes before the log line is today's (the Worker logs with a pad); roll to tomorrow only
+        # when it is well in the past.
+        if ($r -lt $at.AddHours(-2)) { $r = $r.AddDays(1) }
         return $r
     }
     return $null
@@ -313,7 +335,9 @@ function Get-WorkerState([bool]$working, $pausedUntil, $waiting, $lastClaim, [da
 
 $now         = Get-Date
 $alerts      = New-Object System.Collections.Generic.List[string]
+if ($memAlert) { $alerts.Add($memAlert) }
 $waiting     = $null
+$waitingCards = @()
 $pausedUntil = $null
 $claimLogAt  = $null
 $statePath   = Join-Path $root 'state.json'
@@ -359,6 +383,77 @@ if ($token) {
         Log "Tasks query failed: $($_.Exception.Message)"
     }
 }
+$waitingNames = @($waitingCards | ForEach-Object { Plain $_.properties.Task.title })
+
+# A machine whose Worker reads GitHub Issues (JARVIS_QUEUE=github) counts its waiting cards there instead:
+# open, status:approved, unclaimed, for this machine or any; plus Notion cards still Approved that have no GitHub
+# copy yet (no issue with the same title or carrying the Notion page id). Claims come from the claim comments.
+# No JARVIS_QUEUE variable (agent.py may keep it in its own settings): treat it as github when agent.log mentions
+# queue=github or ghq, or when this machine posted a claim comment in the tasks repo in the last 24 h.
+$queueMode = @('Process', 'User', 'Machine') | ForEach-Object { [Environment]::GetEnvironmentVariable('JARVIS_QUEUE', $_) } |
+    Where-Object { $_ } | Select-Object -First 1
+if (-not $queueMode -and [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')) {
+    if (@($agentLines | Where-Object { $_ -match '(?i)queue\s*[=:]\s*github|\bghq\b' }).Count) { $queueMode = 'github' }
+    else {
+        try {
+            $repoQ = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
+            $since = (Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $recent = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$repoQ/issues/comments?since=$since&per_page=100" -TimeoutSec 30 -Headers @{
+                Authorization = "Bearer $([Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User'))"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'jarvis-watchdog' })
+            if (@($recent | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " -and ([datetime]$_.created_at).ToUniversalTime() -gt (Get-Date).ToUniversalTime().AddHours(-24) }).Count) { $queueMode = 'github' }
+        } catch { Log "GitHub queue check failed: $(Redact $_.Exception.Message)" }
+    }
+}
+if ("$queueMode".Trim().ToLower() -eq 'github') {
+    $ghTok  = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
+    $ghRepo = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
+    $waiting = $null
+    if (-not $ghTok) {
+        $alerts.Add('Worker reads GitHub but GITHUB_TASKS_TOKEN is not set; waiting cards unknown')
+    } else {
+        try {
+            $ghHdr = @{ Authorization = "Bearer $ghTok"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'jarvis-watchdog' }
+            $issues = @(); $page = 1
+            do {
+                $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=all&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30)
+                $issues += $batch; $page++
+            } while ($batch.Count -eq 100 -and $page -le 10)
+            $issues = @($issues | Where-Object { -not $_.pull_request })
+            $ghReady = @($issues | Where-Object {
+                $n = @($_.labels | ForEach-Object { $_.name })
+                $_.state -eq 'open' -and $n -contains 'status:approved' -and -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
+                    ($n -contains 'machine:any' -or $n -contains "machine:$machine" -or -not @($n | Where-Object { $_ -like 'machine:*' }))
+            })
+            $ghTitles = @{}; foreach ($i in $issues) { $ghTitles["$($i.title)".Trim().ToLower()] = $true }
+            $ghBodies = ($issues | ForEach-Object { "$($_.body)" }) -join "`n"
+            $notionOnly = @($waitingCards | Where-Object {
+                -not $ghTitles.ContainsKey((Plain $_.properties.Task.title).Trim().ToLower()) -and
+                    -not $ghBodies.Contains("$($_.id)") -and -not $ghBodies.Contains("$($_.id)".Replace('-', ''))
+            })
+            $waiting = $ghReady.Count + $notionOnly.Count
+            $waitingNames = @($ghReady | ForEach-Object { "#$($_.number) $($_.title)" }) + @($notionOnly | ForEach-Object { Plain $_.properties.Task.title })
+
+            # Newest claim by this machine, and whether a run was logged after it.
+            $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30)
+            $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+            if ($claimC) {
+                $t = ([datetime]$claimC.created_at).ToLocalTime()
+                if (-not $lastClaim -or $t -gt $lastClaim) {
+                    $lastClaim  = $t
+                    $num        = [int](($claimC.issue_url -split '/')[-1])
+                    $lastTitle  = "#$num " + "$(($issues | Where-Object { $_.number -eq $num } | Select-Object -First 1).title)"
+                    $claimLogAt = $null
+                    $runC = $cm | Where-Object { $_.issue_url -eq $claimC.issue_url -and "$($_.body)" -match "jarvis:runmeta \{[^}]*`"machine`": `"$machine`"" } | Select-Object -First 1
+                    if ($runC) { $claimLogAt = ([datetime]$runC.created_at).ToLocalTime() }
+                }
+            }
+        } catch {
+            $waiting = $null
+            $alerts.Add('Could not read the GitHub task queue: ' + $_.Exception.Message)
+            Log "GitHub queue query failed: $(Redact $_.Exception.Message)"
+        }
+    }
+}
 foreach ($l in @($tail) + @($agentLines)) {
     $r = Parse-ResetTime $l $now
     if ($r -and $r -gt $now -and (-not $pausedUntil -or $r -gt $pausedUntil)) { $pausedUntil = $r }
@@ -374,21 +469,46 @@ $recentTaskLog = $newest -and $newest.Name -like 'task-*' -and ($now - $newest.L
 $openClaim     = $lastClaim -and ($now - $lastClaim).TotalMinutes -lt 50 -and (-not $claimLogAt -or $claimLogAt -lt $lastClaim)
 $worker = Get-WorkerState ($workerTaskRunning -or $recentTaskLog -or $openClaim) $pausedUntil $waiting $lastClaim $now $idleAfterMin
 
+# The Worker's own heartbeat (homebase agent.py writes C:\Jarvis\worker.heartbeat): a worker line, "Working: ..." or
+# "IDLE-REASON: <code> <detail>", and a rig line, "Rig: ...". When it is fresh it is the truth about the Worker,
+# better than inferring idle from the card count.
+$hbPath   = Join-Path (Split-Path $root -Parent) 'worker.heartbeat'
+$hbWorker = $null
+$hbRig    = $null
+if ((Test-Path $hbPath) -and ($now - (Get-Item $hbPath).LastWriteTime).TotalMinutes -lt 20) {
+    foreach ($l in @(Get-Content $hbPath -ErrorAction SilentlyContinue)) {
+        $v = ($l -replace '^\s*(worker|rig)\s*[:=]\s*(?=(Working|IDLE-REASON|Rig)\b)', '').Trim()
+        if (-not $hbWorker -and $v -match '^(Working|IDLE-REASON)\b') { $hbWorker = $v }
+        elseif (-not $hbRig -and ($v -match '^Rig\b' -or $l -match '^\s*rig\s*[:=]')) { $hbRig = ($v -replace '^\s*rig\s*[:=]\s*', '') }
+    }
+}
+$hbIdle = $null
+if ($hbWorker -match '^Working\b') { $worker = 'Working' }
+elseif ($hbWorker -match '^IDLE-REASON:?\s*(.*)$') {
+    $hbIdle = $Matches[1].Trim()
+    if ($hbIdle -match '(?i)usage|session limit|rate.?limit') { $worker = 'Paused (usage limit)' }
+    elseif ($hbIdle -match '(?i)^(no[-_ ]?(cards|work)|queue[-_ ]?empty|nothing)') { $worker = 'Idle'; $hbIdle = $null }
+    elseif ($worker -ne 'Paused (usage limit)') { $worker = 'Idle with cards waiting' }
+}
+
 $claimText = if ($lastClaim) { $lastClaim.ToString('MM/dd HH:mm') } else { 'never' }
 $workerLine = "Worker: $worker"
 if ($worker -eq 'Paused (usage limit)') { $workerLine += " until $($pausedUntil.ToString('MM/dd HH:mm'))" }
 $workerLine += ", last claim $claimText"
 if ($lastTitle) { $workerLine += " ($lastTitle)" }
 $lines.Insert(1, $workerLine)
+if ($hbWorker) { $lines.Insert(2, "  heartbeat: $hbWorker") }
+if ($hbRig)    { $lines.Insert($(if ($hbWorker) { 3 } else { 2 }), "  Rig: $hbRig") }
 if ($null -ne $waiting) {
-    $names = @($waitingCards | Select-Object -First 3 | ForEach-Object { Plain $_.properties.Task.title })
-    $lines.Insert(2, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
+    $names = @($waitingNames | Select-Object -First 3)
+    $lines.Insert(2 + [int][bool]$hbWorker + [int][bool]$hbRig, "Approved cards waiting: $waiting" + $(if ($names) { ' (' + ($names -join '; ') + ')' } else { '' }))
 }
 
 if ($rcOutside) { $alerts.Add('Remote Control only running by hand (task copy not running); it stops if that terminal closes') }
 if ($rcState -eq 'Down') { $alerts.Insert(0, "Remote Control down, restart failed: run 'claude remote-control' in C:\Jarvis") }
 elseif ($rcState -ne 'Up') { $alerts.Insert(0, "Remote Control $($rcState.ToLower())") }
-if ($worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
+if ($hbIdle -and $worker -ne 'Paused (usage limit)') { $alerts.Insert(0, "Worker idle: $hbIdle") }
+elseif (-not $hbWorker -and $worker -eq 'Idle with cards waiting') { $alerts.Insert(0, "Worker idle with $waiting approved card$(if ($waiting -ne 1) { 's' }) waiting, last claim $claimText") }
 if ($needsJake) { $alerts.Insert(0, "Needs Jake: $needsJake") }
 $portsDown = @($portStatus | Where-Object { $_ -like '*DOWN' })
 if ($portsDown) { $alerts.Add('Down: ' + (($portsDown | ForEach-Object { ($_ -split ' :')[0] }) -join ', ')) }
