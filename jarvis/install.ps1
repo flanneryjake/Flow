@@ -1,18 +1,27 @@
 # Jarvis Always-On installer: run ONCE per machine (homebase first, then the rig).
 # In a normal (non-admin) PowerShell window on that machine, paste:
 #
-#   irm https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis/install.ps1 | iex
+#   $t=[Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN','User'); if(!$t){$t=Read-Host 'GitHub token'; [Environment]::SetEnvironmentVariable('GITHUB_TASKS_TOKEN',$t,'User')}; irm -Headers @{Authorization="Bearer $t"; Accept='application/vnd.github.raw'} 'https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/install.ps1?ref=claude/eager-knuth-lakcxt' | iex
 #
 # What it does:
 #   - updates Claude Code and runs `claude remote-control` once in a visible window so you can answer the
 #     two one-time questions (trust the folder, enable Remote Control) -- these can't be pre-answered
 #   - scheduled task "Jarvis Remote Control": starts the Remote Control server hidden at every logon
 #   - scheduled task "Jarvis Watchdog": every 5 min restarts Remote Control if it died (it exits after
-#     ~10 min offline) and updates this machine's row in the Notion Machine Health table
+#     ~10 min offline) and updates this machine's Health issue in the GitHub tasks repo
 #   - homebase only: never sleep on AC power, lid close does nothing on AC
 
 $ErrorActionPreference = 'Stop'
-$base = 'https://raw.githubusercontent.com/flanneryjake/Flow/claude/eager-knuth-lakcxt/jarvis'
+$flowRef = 'claude/eager-knuth-lakcxt'
+# Flow is private, so files come through the GitHub API with this user's GITHUB_TASKS_TOKEN
+# (the token needs Contents: Read-only on flanneryjake/Flow).
+function Get-FlowFile([string]$path, [string]$out) {
+    $tok = if ($env:GITHUB_TASKS_TOKEN) { $env:GITHUB_TASKS_TOKEN } else { [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User') }
+    $h = @{ Accept = 'application/vnd.github.raw'; 'User-Agent' = 'jarvis-installer' }
+    if ($tok) { $h.Authorization = "Bearer $tok" }
+    try { Invoke-WebRequest -UseBasicParsing -Headers $h "https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/$path`?ref=$flowRef" -OutFile $out }
+    catch { throw "Could not download jarvis/$path from Flow ($_). Check that GITHUB_TASKS_TOKEN can read flanneryjake/Flow." }
+}
 
 function Say([string]$m, [string]$c = 'Cyan') { Write-Host $m -ForegroundColor $c }
 $results = [ordered]@{}
@@ -21,9 +30,10 @@ $results = [ordered]@{}
 switch ($env:COMPUTERNAME.ToUpper()) {
     'DESKTOP-5VE3C77' { $machine = 'homebase' }
     'DESKTOP-VLLDDM4' { $machine = 'rig' }
+    'LAPTOP-4150EGRS' { $machine = 'laptop' }
     default {
-        $machine = (Read-Host "Is this 'homebase' or 'rig'? (computer name $env:COMPUTERNAME)").Trim().ToLower()
-        if ($machine -notin 'homebase', 'rig') { throw "Unknown machine '$machine'." }
+        $machine = (Read-Host "Is this 'homebase', 'rig' or 'laptop'? (computer name $env:COMPUTERNAME)").Trim().ToLower()
+        if ($machine -notin 'homebase', 'rig', 'laptop') { throw "Unknown machine '$machine'." }
     }
 }
 $workDir = if ($machine -eq 'homebase') { 'C:\Jarvis' } else { "$env:USERPROFILE\Desktop\Claude" }
@@ -45,31 +55,14 @@ foreach ($v in 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_T
 }
 
 # --- Watchdog script -----------------------------------------------------------------
-Invoke-WebRequest -UseBasicParsing "$base/watchdog.ps1" -OutFile (Join-Path $wdDir 'watchdog.ps1')
+Get-FlowFile "watchdog.ps1" (Join-Path $wdDir 'watchdog.ps1')
 $results['Watchdog script'] = "$wdDir\watchdog.ps1"
 
-# --- Notion token (for the health row) -- ------------------------------------------------
-$token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'User')
-if (-not $token) { $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'Machine') }
-if (-not $token) {
-    # The Worker already has one; look in its config files before asking.
-    $pattern = '(ntn_[A-Za-z0-9]{30,}|secret_[A-Za-z0-9]{30,})'
-    $hit = Get-ChildItem -Path 'C:\Jarvis', "$env:USERPROFILE\JarvisAgent" -Recurse -File -Include *.env, *.json, *.txt, *.ini, *.cfg, *.ps1, *.py -ErrorAction SilentlyContinue |
-        Where-Object { $_.Length -lt 200KB -and $_.FullName -notmatch '\\logs\\|\\work\\' } |
-        Select-String -Pattern $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($hit) { $token = $hit.Matches[0].Value; Say "Found the Notion token the Worker uses ($($hit.Path))." }
-}
-if (-not $token) {
-    Say 'Copy your Notion integration token (Notion > Jarvis > Configuration), then press Enter here.' 'Yellow'
-    [void](Read-Host)
-    $token = "$(Get-Clipboard -Raw)".Trim()
-    Set-Clipboard -Value ' '
-}
-if ($token -match '^(ntn_|secret_)') {
-    [Environment]::SetEnvironmentVariable('NOTION_TOKEN', $token, 'User')
-    $results['Notion token'] = 'set (user env NOTION_TOKEN)'
+# --- GitHub token (for the health issue and the waiting-card count) --------------------
+if ([Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')) {
+    $results['GitHub token'] = 'set (user env GITHUB_TASKS_TOKEN)'
 } else {
-    $results['Notion token'] = 'MISSING - health row will not update'
+    $results['GitHub token'] = 'MISSING - health issue will not update (set GITHUB_TASKS_TOKEN)'
 }
 
 # --- Power (homebase stays awake; the rig is allowed to sleep, homebase wakes it) -----
@@ -107,9 +100,11 @@ $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGo
     -MultipleInstances IgnoreNew
 
 # Remote Control keeps a hidden console (no output redirect), because without a terminal it refuses to start.
-$rcCmd = "Set-Location '$workDir'; claude remote-control --name '$machine' --permission-mode acceptEdits --verbose --debug-file '$logDir\remote-control-debug.log'"
+# Prefer npm's claude.cmd over its claude.ps1 shim, which won't load where the execution policy blocks scripts (the laptop).
+$claudeExe = if (Get-Command claude.cmd -ErrorAction SilentlyContinue) { 'claude.cmd' } else { 'claude' }
+$rcCmd = "Set-Location '$workDir'; $claudeExe remote-control --name '$machine' --permission-mode acceptEdits --verbose --debug-file '$logDir\remote-control-debug.log'"
 $rcAction = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $workDir `
-    -Argument "-NoProfile -WindowStyle Hidden -Command `"$rcCmd`""
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$rcCmd`""
 Register-ScheduledTask -TaskName 'Jarvis Remote Control' -Action $rcAction -Principal $principal -Settings $settings `
     -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $user) -Force | Out-Null
 
@@ -135,7 +130,7 @@ Say ''
 Say '== Done ==' 'Green'
 $results.GetEnumerator() | ForEach-Object { Say ("  {0}: {1}" -f $_.Key, $_.Value) 'Green' }
 Say ''
-Say 'Health snapshot (also written to the Machine Health table in Notion):'
+Say 'Health snapshot (also written to this machine''s Health issue in flanneryjake/jarvis-tasks):'
 Write-Host $snap
 Say ''
 Say "Check: in the Claude app's Code tab you should now see a session named '$machine'." 'Yellow'

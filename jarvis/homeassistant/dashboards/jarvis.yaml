@@ -8,7 +8,7 @@
 #         icon: mdi:robot
 #         show_in_sidebar: true
 #         filename: dashboards/jarvis.yaml
-# Machine entities come from HASS.Agent (Windows) and jarvis_agent.py (Linux / Pi) with the names set in
+# Queue and health sensors come from packages/jarvis.yaml (GitHub jarvis-tasks). Machine entities come from HASS.Agent (Windows) and jarvis_agent.py (Linux / Pi) with the names set in
 # README.md; rename here if a machine uses a different device name.
 title: Jarvis
 views:
@@ -18,7 +18,7 @@ views:
     cards:
       - type: glance
         title: At a glance
-        columns: 4
+        columns: 5
         entities:
           - entity: sensor.jarvis_approvals_waiting
             name: Approvals
@@ -26,11 +26,13 @@ views:
           - entity: binary_sensor.jarvis_pi_online
             name: Pi
           - entity: sensor.homebase_worker
-            name: Homebase
+            name: HA box
             tap_action: { action: navigate, navigation_path: /jarvis-panel/machines }
-          - entity: sensor.rig_worker
-            name: Rig
+          - entity: sensor.laptop_worker
+            name: Worker
             tap_action: { action: navigate, navigation_path: /jarvis-panel/machines }
+          - entity: sensor.jarvis_needs_jake
+            name: Needs you
       - type: entity
         entity: sensor.jarvis_last_voice_command
         name: Last voice command
@@ -40,6 +42,12 @@ views:
             entity: sensor.homebase_alert
             state_not: OK
         card: { type: entity, entity: sensor.homebase_alert, name: Homebase alert }
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: sensor.laptop_alert
+            state_not: OK
+        card: { type: entity, entity: sensor.laptop_alert, name: Worker laptop alert }
       - type: conditional
         conditions:
           - condition: state
@@ -94,14 +102,14 @@ views:
           - entity: button.rig_shutdown
             name: Shut down
       - type: entities
-        title: RTX 5060 laptop
+        title: RTX 5060 laptop (Worker)
         entities:
+          - sensor.laptop_worker
+          - sensor.laptop_last_check_in
           - sensor.laptop5060_cpuload
           - sensor.laptop5060_memoryusage
           - sensor.laptop5060_lastactive
           - type: divider
-          - entity: button.laptop5060_sleep
-            name: Sleep
           - entity: button.laptop5060_restart
             name: Restart
       - type: entities
@@ -153,12 +161,14 @@ views:
     icon: mdi:text-box-search
     cards:
       - type: markdown
-        title: Homebase snapshot
+        title: Homebase health
         content: >-
-          {{ (state_attr('sensor.homebase_worker', 'Snapshot').rich_text | map(attribute='plain_text') | join)
-             if state_attr('sensor.homebase_worker', 'Snapshot') else 'No snapshot yet' }}
+          {{ state_attr('sensor.homebase_worker', 'body') or 'No health report yet' }}
       - type: markdown
-        title: Rig snapshot
+        title: Laptop (Worker) health
         content: >-
-          {{ (state_attr('sensor.rig_worker', 'Snapshot').rich_text | map(attribute='plain_text') | join)
-             if state_attr('sensor.rig_worker', 'Snapshot') else 'No snapshot yet' }}
+          {{ state_attr('sensor.laptop_worker', 'body') or 'No health report yet' }}
+      - type: markdown
+        title: Rig health
+        content: >-
+          {{ state_attr('sensor.rig_worker', 'body') or 'No health report yet' }}

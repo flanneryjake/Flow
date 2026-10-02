@@ -2,72 +2,91 @@
 # configuration.yaml has:
 #   homeassistant:
 #     packages: !include_dir_named packages
-# Secret it needs in secrets.yaml: notion_auth: "Bearer ntn_..." (the same Notion token the watchdog uses).
+# Secret it needs in secrets.yaml: github_auth: "Bearer <token>", a fine-grained token for
+# flanneryjake/jarvis-tasks with Issues: Read (the queue and health issues live there; Notion is retired).
 
-# --- Notion: approvals waiting + Machine Health rows ---------------------------------------
+# --- GitHub queue: approvals waiting, needs-Jake, and each machine's Health issue ----------
 rest:
-  - resource: https://api.notion.com/v1/databases/7c1c59e927644dfba461c88a67dbd32c/query
-    method: POST
-    headers:
-      Authorization: !secret notion_auth
-      Notion-Version: "2022-06-28"
-      Content-Type: application/json
-    payload: >-
-      {"page_size": 100, "filter": {"and": [
-        {"property": "Type", "select": {"equals": "Approval"}},
-        {"property": "Status", "select": {"equals": "Inbox"}}]}}
+  - resource: "https://api.github.com/search/issues?q=repo:flanneryjake/jarvis-tasks+is:issue+is:open+label:status:staged&per_page=1"
+    headers: &gh
+      Authorization: !secret github_auth
+      Accept: application/vnd.github+json
+      User-Agent: jarvis-home-assistant
     scan_interval: 300
     sensor:
       - name: Jarvis approvals waiting
         unique_id: jarvis_approvals_waiting
         icon: mdi:inbox-arrow-down
-        value_template: "{{ value_json.results | length }}"
-        json_attributes_path: "$"
-        json_attributes: [results]
+        value_template: "{{ value_json.total_count }}"
 
-  - resource: https://api.notion.com/v1/pages/3ea11c3639af816bbd70fd523fe28b81
-    headers: &notion_get
-      Authorization: !secret notion_auth
-      Notion-Version: "2022-06-28"
+  - resource: "https://api.github.com/search/issues?q=repo:flanneryjake/jarvis-tasks+is:issue+is:open+label:status:needs-jake&per_page=1"
+    headers: *gh
+    scan_interval: 300
+    sensor:
+      - name: Jarvis needs Jake
+        unique_id: jarvis_needs_jake
+        icon: mdi:account-alert
+        value_template: "{{ value_json.total_count }}"
+
+  # The watchdogs keep one open issue per machine (homebase #1, rig #2, laptop #203), titled
+  # "Health: <machine> - <Worker state>", with the full snapshot as its body and the health:alert label
+  # while something is wrong.
+  - resource: https://api.github.com/repos/flanneryjake/jarvis-tasks/issues/1
+    headers: *gh
     scan_interval: 300
     sensor:
       - name: Homebase worker
         unique_id: jarvis_homebase_worker
         icon: mdi:robot-industrial
-        value_template: "{{ value_json.properties.Worker.select.name | default('Unknown') }}"
-        json_attributes_path: "$.properties"
-        json_attributes: [Snapshot]
+        value_template: "{{ (value_json.title | regex_replace('^Health: homebase[^A-Za-z]*', '')) or 'Unknown' }}"
+        json_attributes: [body, updated_at, html_url]
       - name: Homebase alert
         unique_id: jarvis_homebase_alert
         icon: mdi:alert-circle-outline
         value_template: >-
-          {% set t = value_json.properties.Alert.rich_text | map(attribute='plain_text') | join %}
-          {{ (t or 'OK')[:250] }}
+          {{ 'Alert' if value_json.labels | selectattr('name', 'eq', 'health:alert') | list else 'OK' }}
       - name: Homebase last check-in
         unique_id: jarvis_homebase_checkin
         device_class: timestamp
-        value_template: "{{ value_json.properties['Last check-in'].date.start }}"
+        value_template: "{{ value_json.updated_at }}"
 
-  - resource: https://api.notion.com/v1/pages/3ea11c3639af81b5af25cb91f2f88cdd
-    headers: *notion_get
+  - resource: https://api.github.com/repos/flanneryjake/jarvis-tasks/issues/2
+    headers: *gh
     scan_interval: 300
     sensor:
       - name: Rig worker
         unique_id: jarvis_rig_worker
         icon: mdi:robot-industrial
-        value_template: "{{ value_json.properties.Worker.select.name | default('Unknown') }}"
-        json_attributes_path: "$.properties"
-        json_attributes: [Snapshot]
+        value_template: "{{ (value_json.title | regex_replace('^Health: rig[^A-Za-z]*', '')) or 'Unknown' }}"
+        json_attributes: [body, updated_at, html_url]
       - name: Rig alert
         unique_id: jarvis_rig_alert
         icon: mdi:alert-circle-outline
         value_template: >-
-          {% set t = value_json.properties.Alert.rich_text | map(attribute='plain_text') | join %}
-          {{ (t or 'OK')[:250] }}
+          {{ 'Alert' if value_json.labels | selectattr('name', 'eq', 'health:alert') | list else 'OK' }}
       - name: Rig last check-in
         unique_id: jarvis_rig_checkin
         device_class: timestamp
-        value_template: "{{ value_json.properties['Last check-in'].date.start }}"
+        value_template: "{{ value_json.updated_at }}"
+
+  - resource: https://api.github.com/repos/flanneryjake/jarvis-tasks/issues/203
+    headers: *gh
+    scan_interval: 300
+    sensor:
+      - name: Laptop worker
+        unique_id: jarvis_laptop_worker
+        icon: mdi:robot-industrial
+        value_template: "{{ (value_json.title | regex_replace('^Health: laptop[^A-Za-z]*', '')) or 'Unknown' }}"
+        json_attributes: [body, updated_at, html_url]
+      - name: Laptop alert
+        unique_id: jarvis_laptop_alert
+        icon: mdi:alert-circle-outline
+        value_template: >-
+          {{ 'Alert' if value_json.labels | selectattr('name', 'eq', 'health:alert') | list else 'OK' }}
+      - name: Laptop last check-in
+        unique_id: jarvis_laptop_checkin
+        device_class: timestamp
+        value_template: "{{ value_json.updated_at }}"
 
 # --- Wake the rig through the hub (same endpoint the Worker uses) --------------------------
 rest_command:
@@ -108,12 +127,12 @@ automation:
     alias: Jarvis machine alert to phone
     triggers:
       - trigger: state
-        entity_id: [sensor.homebase_alert, sensor.rig_alert]
+        entity_id: [sensor.homebase_alert, sensor.rig_alert, sensor.laptop_alert]
     conditions:
       - condition: template
-        value_template: "{{ trigger.to_state.state not in ['OK', 'unknown', 'unavailable', 'Remote Control restarted'] }}"
+        value_template: "{{ trigger.to_state.state == 'Alert' }}"
     actions:
       - action: notify.notify
         data:
           title: "Jarvis: {{ trigger.to_state.name }}"
-          message: "{{ trigger.to_state.state }}"
+          message: "Open the Health issue: {{ state_attr(trigger.entity_id | replace('_alert', '_worker'), 'html_url') }}"

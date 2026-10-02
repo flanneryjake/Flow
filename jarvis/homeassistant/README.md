@@ -7,7 +7,7 @@ machine, and the Jarvis control panel. HA runs as a container in WSL2 Docker on 
 | File | Goes to | What it does |
 | --- | --- | --- |
 | `mosquitto/mosquitto.conf` | Mosquitto container's `/mosquitto/config/` | Broker with logins required, no anonymous clients |
-| `packages/jarvis.yaml` | `<HA config>/packages/` | Approvals-waiting count and both Machine Health rows from Notion, Wake-rig button, Pi status + last voice command over MQTT, phone alert when a machine row turns red |
+| `packages/jarvis.yaml` | `<HA config>/packages/` | Approvals-waiting and needs-Jake counts plus each machine's Health issue from the GitHub queue (`jarvis-tasks`), Wake-rig button, Pi status + last voice command over MQTT, phone alert when a machine row turns red |
 | `dashboards/jarvis.yaml` | `<HA config>/dashboards/` | The Jarvis panel: Home summary, Machines, Approvals (Hub v3 embedded), Voice, Logs |
 | `linux-agent/` | the Pi (after it's flashed) | Reports CPU/memory/temp/uptime to HA and adds Reboot and Restart-voice buttons |
 
@@ -34,17 +34,17 @@ machine, and the Jarvis control panel. HA runs as a container in WSL2 Docker on 
          filename: dashboards/jarvis.yaml
    ```
 
-   and to `secrets.yaml`: `notion_auth: "Bearer <the NOTION_TOKEN the watchdog uses>"`.
-5. Developer tools > YAML > Check configuration, then restart HA. `sensor.homebase_worker` should read the same as the
-   homebase row in Notion's 🩺 Machine Health.
+   and to `secrets.yaml`: `github_auth: "Bearer <token>"`, a fine-grained token for `flanneryjake/jarvis-tasks` with Issues: Read only.
+5. Developer tools > YAML > Check configuration, then restart HA. `sensor.laptop_worker` should match the title of
+   the `Health: laptop` issue in `jarvis-tasks`.
 
-Approvals count = Tasks cards with Type **Approval** and Status **Inbox**. Approving and snoozing stay in Hub v3
+Approvals count = open `jarvis-tasks` issues labelled `status:staged` (ready for you to approve). Approving and snoozing stay in Hub v3
 (embedded on the Approvals view) so the PIN rules live in one place.
 
 ## Agent on every machine
 
 **Windows (homebase, rig, RTX 5060 laptop): HASS.Agent.** Install from github.com/LAB02-Research/HASS.Agent, point
-it at MQTT `100.90.201.22:1883` user `jarvis`, and set the device name to `homebase`, `rig` or `laptop5060`. Add these
+it at MQTT `100.90.201.22:1883` user `jarvis`, and set the device name to `homebase`, `rig` or `laptop5060`. The 5060 is a Modern Standby PC, so it gets no Sleep button: sleeping it pauses the Worker. Add these
 so the panel's entity names match (`sensor.<device>_<name>`, `button.<device>_<name>`):
 
 - Sensors: `cpuload` (CpuLoad), `memoryusage` (MemoryUsage), `lastactive` (LastActive); on the rig also `gpuload`
