@@ -8,6 +8,7 @@ command topic is logged and ignored.
 Config comes from the environment (see jarvis-agent.service):
   MQTT_HOST, MQTT_PORT (1883), MQTT_USER, MQTT_PASS
   JARVIS_NODE        entity prefix, default "jarvis_pi"  -> sensor.jarvis_pi_cpu, button.jarvis_pi_reboot
+  JARVIS_DEVICE_NAME device name shown in HA, default the node name in title case
   JARVIS_BASE_TOPIC  default "jarvis/pi"; status is <base>/status (online/offline, retained, last will)
   JARVIS_VOICE_UNIT  systemd unit the restart button restarts, default "jarvis-voice.service"
   JARVIS_INTERVAL    seconds between reports, default 30
@@ -19,6 +20,7 @@ import subprocess
 import time
 
 NODE = os.environ.get("JARVIS_NODE", "jarvis_pi")
+DEVICE_NAME = os.environ.get("JARVIS_DEVICE_NAME") or NODE.replace("_", " ").title()
 BASE = os.environ.get("JARVIS_BASE_TOPIC", "jarvis/pi")
 VOICE_UNIT = os.environ.get("JARVIS_VOICE_UNIT", "jarvis-voice.service")
 INTERVAL = int(os.environ.get("JARVIS_INTERVAL", "30"))
@@ -43,7 +45,7 @@ log = logging.getLogger("jarvis-agent")
 
 
 def device():
-    return {"identifiers": [NODE], "name": NODE.replace("_", " ").title(), "manufacturer": "Jarvis"}
+    return {"identifiers": [NODE], "name": DEVICE_NAME, "manufacturer": "Jarvis"}
 
 
 def discovery_messages():

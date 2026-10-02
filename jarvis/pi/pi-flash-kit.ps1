@@ -6,7 +6,7 @@
 #
 # What it does:
 #   1. installs Raspberry Pi Imager (winget) and downloads Raspberry Pi OS Lite 64-bit, checksum verified
-#   2. makes an SSH key for the rig if it has none, and adds "ssh jarvis-pi" to the rig's SSH config
+#   2. makes an SSH key for the rig if it has none, and adds "ssh hal9000" to the rig's SSH config
 #   3. asks once for the Wi-Fi password (taken from the rig's saved Wi-Fi when it can) and a Tailscale auth key,
 #      saved in %USERPROFILE%\.jarvis\pi-secrets.json on the rig only
 #   4. builds the first-boot files (cloud-init user-data/network-config, firstboot.sh, the Jarvis agent)
@@ -28,7 +28,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $flowRefs = @('claude/eager-knuth-lakcxt', 'claude/project-thread-sf2tkg')   # agent files may still be on the HA branch
-$piHost = 'jarvis-pi'
+$piHost = 'hal9000'
 $piUser = 'jarvis'
 $country = 'US'
 $timezone = 'America/New_York'
@@ -94,7 +94,7 @@ if ((Test-Path $imageFile) -and ((Get-FileHash $imageFile -Algorithm SHA256).Has
 }
 Get-ChildItem $kitDir -Filter '*raspios*.img.xz' | Where-Object FullName -ne $imageFile | Remove-Item -ErrorAction SilentlyContinue
 
-# --- 2. SSH key and "ssh jarvis-pi" ------------------------------------------------------
+# --- 2. SSH key and "ssh hal9000" ------------------------------------------------------
 $sshDir = Join-Path $env:USERPROFILE '.ssh'
 $keyPath = Join-Path $sshDir 'id_ed25519'
 New-Item -ItemType Directory -Force -Path $sshDir | Out-Null

@@ -1,11 +1,12 @@
-# Jarvis Pi
+# Hal9000 (the Jarvis Pi)
 
 A Raspberry Pi booting from a 128 GB M.2 drive in a USB enclosure. It's the always-on, low-power helper next to Home
 Assistant on the junk laptop (homebase backup, `http://100.90.201.22:8123`):
 
-- **Tailnet node** `jarvis-pi`, with Tailscale SSH, so every machine and the phone can reach it.
+- **Tailnet node** `hal9000`, with Tailscale SSH, so every machine and the phone can reach it.
 - **Jarvis agent** (`../homeassistant/linux-agent/`): CPU, memory, temperature and uptime show up in Home Assistant
   on their own through MQTT discovery, plus Reboot and Restart-voice buttons.
+- **Local model (later)**: if it runs one, it goes in Ollama as `hal9000`, shown as Hal9000.
 - **Self-healing**: unattended security updates and the hardware watchdog (a hung Pi reboots itself).
 - **Next, when a USB mic and speaker are attached**: the always-listening "Hey Jarvis" satellite for the Jarvis voice
   pipeline (`../homeassistant/voice/`). The HA package already listens on `jarvis/pi/...` for it.
@@ -30,7 +31,7 @@ OS: Raspberry Pi OS Lite 64-bit (Trixie, cloud-init first boot). Works on a Pi 4
 5. On the Pi: drive into a **blue USB 3 port** (the Pi's USB-C port is power only), no SD card, Ethernet if handy,
    then power. First boot takes about 10 minutes.
 
-Done when `ssh jarvis-pi` works from the rig, or `Jarvis Pi` appears in Home Assistant. The first-boot report is
+Done when `ssh hal9000` works from the rig, or `Hal9000` appears in Home Assistant. The first-boot report is
 `/boot/firmware/jarvis/FIRSTBOOT-RESULT.txt` (also readable by plugging the drive into the rig) and the full log is
 `/var/log/jarvis-firstboot.log`.
 
@@ -40,8 +41,8 @@ Done when `ssh jarvis-pi` works from the rig, or `Jarvis Pi` appears in Home Ass
   generated console password for user `jarvis`). On the Pi, first boot moves them to `/etc/jarvis/secrets.env`
   (root-only), wipes the copy on the boot partition, and drops the Tailscale key and console password once used.
 - Tailscale key: login.tailscale.com/admin/settings/keys > Generate auth key, **one-off**, **Pre-approved** on.
-  Without one, the Pi still boots; finish with `sudo tailscale up --ssh --hostname=jarvis-pi` over the LAN
-  (`ssh jarvis@jarvis-pi.local`).
+  Without one, the Pi still boots; finish with `sudo tailscale up --ssh --hostname=hal9000` over the LAN
+  (`ssh jarvis@hal9000.local`).
 - No MQTT password: the agent is installed but stopped. Add it later with `sudo systemctl edit jarvis-agent`
   (`[Service]` / `Environment="MQTT_PASS=..."`), then `sudo systemctl enable --now jarvis-agent`.
 - Pi 5: the kit sets `usb_max_current_enable=1` so the drive gets full USB power. Use the official 27 W supply.
