@@ -16,6 +16,8 @@
   every 2 min (alarms, what's playing, listening switch, lights) plus its private webhook URL, kept in `ha.json`.
   "play jazz", "lights off", "set an alarm for 6", "... in the bedroom" run as Alexa voice commands on that Echo;
   buying, ordering, calling and messaging are refused. No HA token lives on this laptop.
+  `/chat` and `/ha` have no auth: they're reachable only on Jake's tailnet, and `/ha` accepts only a home_url under
+  HA's own webhook prefix. Add a shared-secret header if a non-Jake device ever joins the tailnet.
 - Humor: "humor 40%" sets it (default 60), stored in `state.json`.
 - Runs at logon from the scheduled task "Jarvis TARS" (pythonw, hidden); the laptop watchdog restarts it if it dies.
 - Listens on 127.0.0.1:8790; `tailscale serve --bg --tcp 8790 tcp://127.0.0.1:8790` publishes it on the tailnet
