@@ -18,6 +18,11 @@ $root    = $PSScriptRoot
 $machine = [string](Get-Content (Join-Path $root 'machine.txt') -ErrorAction SilentlyContinue | Select-Object -First 1)
 $machine = $machine.Trim()
 if (-not $machine) { $machine = $env:COMPUTERNAME }
+# Optional display name (display.txt next to machine.txt), e.g. "Junky POS" for backup. It only decorates the
+# Health issue title after the machine key ("Health: backup (Junky POS) - ..."), so every lookup that matches
+# "Health: <machine>" keeps working.
+$display = [string](Get-Content (Join-Path $root 'display.txt') -ErrorAction SilentlyContinue | Select-Object -First 1)
+$display = $display.Trim()
 $idleAfterMin = 15   # Worker counts as idle with cards waiting once nothing has been claimed for this long
 $logDir = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -519,7 +524,7 @@ if ($alerts.Count) { $body += @('> [!WARNING]', ('> ' + ($alerts -join '; ')), '
 $body += @('| | |', '|---|---|') + @($fields.Keys | ForEach-Object { "| $_ | $("$($fields[$_])".Replace('|', '/')) |" })
 $tail5k = $snapshot.Trim(); if ($tail5k.Length -gt 5000) { $tail5k = $tail5k.Substring($tail5k.Length - 5000) }
 $body += @('', '```', $tail5k.Replace('```', "'''"), '```')
-$title = "Health: $machine" + $(if ($worker) { " - $worker" } else { '' })
+$title = "Health: $machine" + $(if ($display -and $display -ne $machine) { " ($display)" } else { '' }) + $(if ($worker) { " - $worker" } else { '' })
 $labels = @('health') + @($(if ($myHealth) { $myHealth.labels | ForEach-Object { $_.name } }) |
     Where-Object { $_ -notin @('health', 'health:alert', $kickLabel) }) + @($(if ($alerts.Count) { 'health:alert' }))
 $update = @{ title = $title; body = ($body -join "`n"); labels = @($labels | Where-Object { $_ }) }
