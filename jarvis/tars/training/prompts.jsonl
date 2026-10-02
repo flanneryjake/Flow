@@ -1,0 +1,213 @@
+{"id": "p001", "category": "morning", "prompt": "morning jarvis", "lane": "local"}
+{"id": "p002", "category": "morning", "prompt": "ugh what time is it", "lane": "local"}
+{"id": "p003", "category": "morning", "prompt": "whats it like outside", "lane": "live"}
+{"id": "p004", "category": "morning", "prompt": "do i need a jacket today", "lane": "live"}
+{"id": "p005", "category": "morning", "prompt": "is it gonna rain on the way in", "lane": "live"}
+{"id": "p006", "category": "morning", "prompt": "anything i should know about the weather before i head out", "lane": "live"}
+{"id": "p007", "category": "morning", "prompt": "how long till sunrise", "lane": "live"}
+{"id": "p008", "category": "morning", "prompt": "coffee's done whats on today", "lane": "local"}
+{"id": "p009", "category": "morning", "prompt": "jarvis i hit snooze twice am i late", "lane": "local"}
+{"id": "p010", "category": "morning", "prompt": "alright heading out", "lane": "local"}
+{"id": "p011", "category": "morning", "prompt": "any news this morning", "lane": "lookup"}
+{"id": "p012", "category": "morning", "prompt": "did i set the alarm for tomorrow", "lane": "home"}
+{"id": "p013", "category": "small_talk", "prompt": "hey jarvis you awake", "lane": "local"}
+{"id": "p014", "category": "small_talk", "prompt": "how's it going", "lane": "local"}
+{"id": "p015", "category": "small_talk", "prompt": "what are you up to", "lane": "local"}
+{"id": "p016", "category": "small_talk", "prompt": "do you ever sleep", "lane": "local"}
+{"id": "p017", "category": "small_talk", "prompt": "you're kind of a smart ass you know that", "lane": "local"}
+{"id": "p018", "category": "small_talk", "prompt": "tell me a joke", "lane": "local"}
+{"id": "p019", "category": "small_talk", "prompt": "set humor to 30 percent", "lane": "local"}
+{"id": "p020", "category": "small_talk", "prompt": "who made you", "lane": "local"}
+{"id": "p021", "category": "small_talk", "prompt": "are you better than alexa", "lane": "local"}
+{"id": "p022", "category": "small_talk", "prompt": "goodnight jarvis", "lane": "local"}
+{"id": "p023", "category": "small_talk", "prompt": "i'm bored", "lane": "local"}
+{"id": "p024", "category": "small_talk", "prompt": "what's your favorite movie", "lane": "local"}
+{"id": "p025", "category": "small_talk", "prompt": "say something british", "lane": "local"}
+{"id": "p026", "category": "weather_time", "prompt": "what's the temperature", "lane": "live"}
+{"id": "p027", "category": "weather_time", "prompt": "what's the weather this weekend", "lane": "live"}
+{"id": "p028", "category": "weather_time", "prompt": "when's sunset", "lane": "live"}
+{"id": "p029", "category": "weather_time", "prompt": "what time is it", "lane": "local"}
+{"id": "p030", "category": "weather_time", "prompt": "what's the date today", "lane": "local"}
+{"id": "p031", "category": "weather_time", "prompt": "how cold is it gonna get tonight", "lane": "live"}
+{"id": "p032", "category": "weather_time", "prompt": "is it windy out", "lane": "live"}
+{"id": "p033", "category": "weather_time", "prompt": "will it rain wednesday", "lane": "live"}
+{"id": "p034", "category": "weather_time", "prompt": "how many days till halloween", "lane": "local"}
+{"id": "p035", "category": "weather_time", "prompt": "what time does it get dark tonight", "lane": "live"}
+{"id": "p036", "category": "weather_time", "prompt": "whats the forecast for the week", "lane": "live"}
+{"id": "p037", "category": "weather_time", "prompt": "is it still raining", "lane": "live"}
+{"id": "p038", "category": "news_sports", "prompt": "did the pats win", "lane": "lookup"}
+{"id": "p039", "category": "news_sports", "prompt": "celtics score last night", "lane": "lookup"}
+{"id": "p040", "category": "news_sports", "prompt": "when do the bruins play next", "lane": "lookup"}
+{"id": "p041", "category": "news_sports", "prompt": "what's going on in the news", "lane": "lookup"}
+{"id": "p042", "category": "news_sports", "prompt": "any traffic on route 3 north", "lane": "lookup"}
+{"id": "p043", "category": "news_sports", "prompt": "is the commuter rail running on time", "lane": "lookup"}
+{"id": "p044", "category": "news_sports", "prompt": "how many championships do the celtics have", "lane": "lookup"}
+{"id": "p045", "category": "news_sports", "prompt": "what's the score of the pats game", "lane": "lookup"}
+{"id": "p046", "category": "news_sports", "prompt": "anything happen in plymouth today", "lane": "lookup"}
+{"id": "p047", "category": "news_sports", "prompt": "how much is gas in plymouth right now", "lane": "lookup"}
+{"id": "p048", "category": "news_sports", "prompt": "who's coaching the patriots now", "lane": "lookup"}
+{"id": "p049", "category": "home", "prompt": "is the bedroom light on", "lane": "home"}
+{"id": "p050", "category": "home", "prompt": "what's playing in the kitchen", "lane": "home"}
+{"id": "p051", "category": "home", "prompt": "are you listening right now", "lane": "home"}
+{"id": "p052", "category": "home", "prompt": "what alarms do i have set", "lane": "home"}
+{"id": "p053", "category": "home", "prompt": "did i leave the lights on", "lane": "home"}
+{"id": "p054", "category": "home", "prompt": "is the printer switch on", "lane": "home"}
+{"id": "p055", "category": "home", "prompt": "is the music still playing in the bedroom", "lane": "home"}
+{"id": "p056", "category": "home", "prompt": "when's my alarm", "lane": "home"}
+{"id": "p057", "category": "home", "prompt": "is the fan on", "lane": "home"}
+{"id": "p058", "category": "home", "prompt": "is the echo in the kitchen doing anything", "lane": "home"}
+{"id": "p059", "category": "home", "prompt": "did my alarm go off this morning", "lane": "home"}
+{"id": "p060", "category": "home", "prompt": "what song is on", "lane": "home"}
+{"id": "p061", "category": "music", "prompt": "what's this song", "lane": "home"}
+{"id": "p062", "category": "music", "prompt": "what's a good song to wake up to", "lane": "local"}
+{"id": "p063", "category": "music", "prompt": "who was the drummer for led zeppelin", "lane": "local"}
+{"id": "p064", "category": "music", "prompt": "when does the new gorillaz album come out", "lane": "lookup"}
+{"id": "p065", "category": "music", "prompt": "make me a playlist for the gym", "lane": "claude"}
+{"id": "p066", "category": "music", "prompt": "what kind of music is miles davis", "lane": "local"}
+{"id": "p067", "category": "music", "prompt": "can you put on some music", "lane": "local"}
+{"id": "p068", "category": "music", "prompt": "what's the song with all the whistling", "lane": "local"}
+{"id": "p069", "category": "music", "prompt": "how many grammys does beyonce have", "lane": "lookup"}
+{"id": "p070", "category": "printing", "prompt": "what nozzle temp for petg", "lane": "local"}
+{"id": "p071", "category": "printing", "prompt": "my first layer keeps peeling up", "lane": "local"}
+{"id": "p072", "category": "printing", "prompt": "why is my print stringing so bad", "lane": "local"}
+{"id": "p073", "category": "printing", "prompt": "if i start a 12 hour print now when will it finish", "lane": "local"}
+{"id": "p074", "category": "printing", "prompt": "how much is a kilo of polymaker petg", "lane": "lookup"}
+{"id": "p075", "category": "printing", "prompt": "is the printer on", "lane": "local"}
+{"id": "p076", "category": "printing", "prompt": "what's the difference between pla and petg", "lane": "local"}
+{"id": "p077", "category": "printing", "prompt": "tell claude to find a cheaper petg supplier that ships to plymouth", "lane": "card"}
+{"id": "p078", "category": "printing", "prompt": "research cheap enclosures for my printer", "lane": "card"}
+{"id": "p079", "category": "printing", "prompt": "find me a model for a headphone hook that goes under a desk", "lane": "lookup"}
+{"id": "p080", "category": "printing", "prompt": "what infill for a shelf bracket", "lane": "local"}
+{"id": "p081", "category": "printing", "prompt": "help me design a filament dry box", "lane": "claude"}
+{"id": "p082", "category": "money", "prompt": "what's the avalanche method", "lane": "local"}
+{"id": "p083", "category": "money", "prompt": "snowball or avalanche which is better for me", "lane": "local"}
+{"id": "p084", "category": "money", "prompt": "what's a balance transfer", "lane": "local"}
+{"id": "p085", "category": "money", "prompt": "help me make a budget", "lane": "claude"}
+{"id": "p086", "category": "money", "prompt": "does paying more than the minimum actually help", "lane": "local"}
+{"id": "p087", "category": "money", "prompt": "when's my credit card payment due", "lane": "local"}
+{"id": "p088", "category": "money", "prompt": "tell claude to compare high yield savings accounts", "lane": "card"}
+{"id": "p089", "category": "money", "prompt": "what's the fed interest rate right now", "lane": "lookup"}
+{"id": "p090", "category": "money", "prompt": "how do i stop impulse buying", "lane": "local"}
+{"id": "p091", "category": "groceries_cooking", "prompt": "what can i make with eggs rice and frozen peas", "lane": "local"}
+{"id": "p092", "category": "groceries_cooking", "prompt": "is market basket open right now", "lane": "lookup"}
+{"id": "p093", "category": "groceries_cooking", "prompt": "cheap high protein lunches", "lane": "local"}
+{"id": "p094", "category": "groceries_cooking", "prompt": "plan me a cheap grocery list for the week no walmart", "lane": "claude"}
+{"id": "p095", "category": "groceries_cooking", "prompt": "how long do i cook chicken thighs at 400", "lane": "local"}
+{"id": "p096", "category": "groceries_cooking", "prompt": "how long is cooked rice good in the fridge", "lane": "local"}
+{"id": "p097", "category": "groceries_cooking", "prompt": "what's on sale at stop and shop this week", "lane": "lookup"}
+{"id": "p098", "category": "groceries_cooking", "prompt": "aldi or market basket for cheap stuff", "lane": "local"}
+{"id": "p099", "category": "groceries_cooking", "prompt": "how do i make a pan sauce", "lane": "local"}
+{"id": "p100", "category": "groceries_cooking", "prompt": "tell claude to make a meal prep plan for sunday", "lane": "card"}
+{"id": "p101", "category": "groceries_cooking", "prompt": "what's a substitute for buttermilk", "lane": "local"}
+{"id": "p102", "category": "mtg", "prompt": "what does trample do", "lane": "local"}
+{"id": "p103", "category": "mtg", "prompt": "how much is a sol ring", "lane": "lookup"}
+{"id": "p104", "category": "mtg", "prompt": "is nadu still legal in commander", "lane": "lookup"}
+{"id": "p105", "category": "mtg", "prompt": "what's in the commander ban list update", "lane": "lookup"}
+{"id": "p106", "category": "mtg", "prompt": "explain the stack", "lane": "local"}
+{"id": "p107", "category": "mtg", "prompt": "build me a budget commander deck around a token general", "lane": "claude"}
+{"id": "p108", "category": "mtg", "prompt": "what's ward", "lane": "local"}
+{"id": "p109", "category": "mtg", "prompt": "deathtouch plus first strike", "lane": "local"}
+{"id": "p110", "category": "mtg", "prompt": "when's the next magic set come out", "lane": "lookup"}
+{"id": "p111", "category": "mtg", "prompt": "tell claude to make a list of budget upgrades for my commander precon", "lane": "card"}
+{"id": "p112", "category": "mtg", "prompt": "what does a tracks a do", "lane": "local"}
+{"id": "p113", "category": "homelab", "prompt": "ollama says out of memory loading the model", "lane": "local"}
+{"id": "p114", "category": "homelab", "prompt": "how do i check if a port is open on windows", "lane": "local"}
+{"id": "p115", "category": "homelab", "prompt": "is the rig online", "lane": "tasks"}
+{"id": "p116", "category": "homelab", "prompt": "hal 9000 hasn't checked in has it", "lane": "tasks"}
+{"id": "p117", "category": "homelab", "prompt": "why is my internet so slow", "lane": "local"}
+{"id": "p118", "category": "homelab", "prompt": "write me a powershell script to restart ollama when it hangs", "lane": "claude"}
+{"id": "p119", "category": "homelab", "prompt": "what's the difference between tailscale serve and funnel", "lane": "local"}
+{"id": "p120", "category": "homelab", "prompt": "tell claude to set up a nightly backup of home assistant to the rig", "lane": "card"}
+{"id": "p121", "category": "homelab", "prompt": "can the flipper zero read my work badge", "lane": "local"}
+{"id": "p122", "category": "homelab", "prompt": "what's the latest version of home assistant", "lane": "lookup"}
+{"id": "p123", "category": "homelab", "prompt": "how do i make the pi boot faster", "lane": "local"}
+{"id": "p124", "category": "homelab", "prompt": "should frank get a 5090 or two 3090s", "lane": "claude"}
+{"id": "p125", "category": "task_board", "prompt": "what did you do overnight", "lane": "tasks"}
+{"id": "p126", "category": "task_board", "prompt": "anything pending that needs me", "lane": "tasks"}
+{"id": "p127", "category": "task_board", "prompt": "what's the rig working on", "lane": "tasks"}
+{"id": "p128", "category": "task_board", "prompt": "how's card 418 going", "lane": "tasks"}
+{"id": "p129", "category": "task_board", "prompt": "what's in the inbox", "lane": "tasks"}
+{"id": "p130", "category": "task_board", "prompt": "is anything stuck in the queue", "lane": "tasks"}
+{"id": "p131", "category": "task_board", "prompt": "did claude finish the grocery list template card", "lane": "tasks"}
+{"id": "p132", "category": "task_board", "prompt": "what's approved for the laptop", "lane": "tasks"}
+{"id": "p133", "category": "task_board", "prompt": "how many cards did we close this week", "lane": "tasks"}
+{"id": "p134", "category": "task_board", "prompt": "is the worker idle", "lane": "tasks"}
+{"id": "p135", "category": "task_board", "prompt": "research the best budget nas drives", "lane": "card"}
+{"id": "p136", "category": "task_board", "prompt": "tell claude to clean up the old branches in the flow repo", "lane": "card"}
+{"id": "p137", "category": "task_board", "prompt": "what's new on the board", "lane": "tasks"}
+{"id": "p138", "category": "planning", "prompt": "help me plan saturday after work", "lane": "local"}
+{"id": "p139", "category": "planning", "prompt": "should i go to the store tonight or tomorrow after work", "lane": "local"}
+{"id": "p140", "category": "planning", "prompt": "is the weather saturday any good for a beach walk", "lane": "live"}
+{"id": "p141", "category": "planning", "prompt": "which day this week has the best weather for washing the car", "lane": "live"}
+{"id": "p142", "category": "planning", "prompt": "i need to hit the bank the post office and the grocery store what order", "lane": "local"}
+{"id": "p143", "category": "planning", "prompt": "ask claude how to structure my week so i'm not wrecked by thursday", "lane": "claude"}
+{"id": "p144", "category": "planning", "prompt": "what time should i go to bed if i get up at 4", "lane": "local"}
+{"id": "p145", "category": "planning", "prompt": "can i fit a print and groceries in before sunset", "lane": "live"}
+{"id": "p146", "category": "planning", "prompt": "plan a cheap magic night for four people what snacks", "lane": "claude"}
+{"id": "p147", "category": "planning", "prompt": "what time do i need to be up tuesday, is my alarm set", "lane": "home"}
+{"id": "p148", "category": "reminders", "prompt": "remind me to take the chicken out of the freezer at 6", "lane": "local"}
+{"id": "p149", "category": "reminders", "prompt": "remind me tomorrow to call the landlord", "lane": "local"}
+{"id": "p150", "category": "reminders", "prompt": "tell claude to remind me friday to swap the printer nozzle", "lane": "card"}
+{"id": "p151", "category": "reminders", "prompt": "don't let me forget the laundry", "lane": "local"}
+{"id": "p152", "category": "reminders", "prompt": "did i set a reminder for the dentist", "lane": "local"}
+{"id": "p153", "category": "reminders", "prompt": "will my alarm go off saturday", "lane": "home"}
+{"id": "p154", "category": "reminders", "prompt": "remind claude to check the printer logs tonight", "lane": "card"}
+{"id": "p155", "category": "reminders", "prompt": "remind me in 20 minutes to check the oven", "lane": "local"}
+{"id": "p156", "category": "reminders", "prompt": "i need to remember to bring my lunch", "lane": "local"}
+{"id": "p157", "category": "general_knowledge", "prompt": "how far away is the moon", "lane": "local"}
+{"id": "p158", "category": "general_knowledge", "prompt": "why is the sky blue", "lane": "local"}
+{"id": "p159", "category": "general_knowledge", "prompt": "who was the first person on the moon", "lane": "local"}
+{"id": "p160", "category": "general_knowledge", "prompt": "whats pi to ten decimal places", "lane": "local"}
+{"id": "p161", "category": "general_knowledge", "prompt": "how many ounces in a cup", "lane": "local"}
+{"id": "p162", "category": "general_knowledge", "prompt": "what year did the mayflower land in plymouth", "lane": "local"}
+{"id": "p163", "category": "general_knowledge", "prompt": "how tall is mount washington", "lane": "local"}
+{"id": "p164", "category": "general_knowledge", "prompt": "who's the governor of massachusetts", "lane": "lookup"}
+{"id": "p165", "category": "general_knowledge", "prompt": "how many people live in plymouth", "lane": "lookup"}
+{"id": "p166", "category": "general_knowledge", "prompt": "what's the speed of light", "lane": "local"}
+{"id": "p167", "category": "general_knowledge", "prompt": "how does a heat pump work", "lane": "local"}
+{"id": "p168", "category": "general_knowledge", "prompt": "what's the population of the us right now", "lane": "lookup"}
+{"id": "p169", "category": "general_knowledge", "prompt": "who invented the light bulb", "lane": "local"}
+{"id": "p170", "category": "follow_up", "prompt": "and the weather saturday?", "lane": "live", "after": [{"role": "user", "text": "what's the weather tomorrow"}, {"role": "assistant", "text": "Sunny with a high near 64, sir, and a light northwest wind."}]}
+{"id": "p171", "category": "follow_up", "prompt": "how did he die", "lane": "local", "after": [{"role": "user", "text": "who was the drummer for led zeppelin"}, {"role": "assistant", "text": "John Bonham, sir."}]}
+{"id": "p172", "category": "follow_up", "prompt": "who scored for them", "lane": "lookup", "after": [{"role": "user", "text": "did the pats win"}, {"role": "assistant", "text": "They did, sir. Patriots 24, Bills 20 on Sunday."}, {"role": "user", "text": "who scored for them"}]}
+{"id": "p173", "category": "follow_up", "prompt": "is it worth it", "lane": "local", "after": [{"role": "user", "text": "what's a balance transfer"}, {"role": "assistant", "text": "Moving a credit card balance to a new card, usually at a low or zero rate for a while. There's normally a fee, and the rate jumps when the promo ends."}]}
+{"id": "p174", "category": "follow_up", "prompt": "and chicken", "lane": "local", "after": [{"role": "user", "text": "how long is cooked rice good in the fridge"}, {"role": "assistant", "text": "Three to four days, sir."}]}
+{"id": "p175", "category": "follow_up", "prompt": "how long has it been at it", "lane": "tasks", "after": [{"role": "user", "text": "what's the rig working on"}, {"role": "assistant", "text": "It's running card 401 right now, sir: the 14B versus 9B benchmark."}]}
+{"id": "p176", "category": "follow_up", "prompt": "in kilometers", "lane": "local", "after": [{"role": "user", "text": "how far away is the moon"}, {"role": "assistant", "text": "About 239,000 miles on average, sir."}]}
+{"id": "p177", "category": "follow_up", "prompt": "does it stop board wipes", "lane": "local", "after": [{"role": "user", "text": "what's ward"}, {"role": "assistant", "text": "Whenever an opponent targets that permanent, they pay the ward cost or the spell is countered."}]}
+{"id": "p178", "category": "follow_up", "prompt": "what's playing in the bedroom then", "lane": "home", "after": [{"role": "user", "text": "what's playing in the kitchen"}, {"role": "assistant", "text": "So What, by Miles Davis."}]}
+{"id": "p179", "category": "follow_up", "prompt": "when did that come out", "lane": "local", "after": [{"role": "user", "text": "who was miles davis"}, {"role": "assistant", "text": "A jazz trumpeter and bandleader, sir. Kind of Blue is the album most people know."}]}
+{"id": "p180", "category": "follow_up", "prompt": "and sunset tomorrow?", "lane": "live", "after": [{"role": "user", "text": "when's sunset"}, {"role": "assistant", "text": "6:19 this evening, sir."}]}
+{"id": "p181", "category": "vague", "prompt": "jarvis um", "lane": "local"}
+{"id": "p182", "category": "vague", "prompt": "the thing with the uh you know", "lane": "local"}
+{"id": "p183", "category": "vague", "prompt": "how long", "lane": "local"}
+{"id": "p184", "category": "vague", "prompt": "turn it", "lane": "local"}
+{"id": "p185", "category": "vague", "prompt": "is it", "lane": "local"}
+{"id": "p186", "category": "vague", "prompt": "what's the guy the actor from the thing with the robots", "lane": "local"}
+{"id": "p187", "category": "vague", "prompt": "whats the whether like", "lane": "local"}
+{"id": "p188", "category": "vague", "prompt": "can you do the thing from yesterday", "lane": "local"}
+{"id": "p189", "category": "vague", "prompt": "jarvis", "lane": "local"}
+{"id": "p190", "category": "vague", "prompt": "what about the other one", "lane": "local"}
+{"id": "p191", "category": "vague", "prompt": "eh never mind", "lane": "local"}
+{"id": "p192", "category": "correction", "prompt": "no i meant in the air fryer", "lane": "local", "after": [{"role": "user", "text": "how long do i cook chicken thighs at 400"}, {"role": "assistant", "text": "35 to 45 minutes bone-in, 20 to 25 boneless. Done at 165 inside."}]}
+{"id": "p193", "category": "correction", "prompt": "no market basket", "lane": "lookup", "after": [{"role": "user", "text": "what time does stop and shop close"}, {"role": "assistant", "text": "10 tonight, sir. The Plymouth store is open 7 to 10 every day."}, {"role": "user", "text": "no market basket"}]}
+{"id": "p194", "category": "correction", "prompt": "no the sun", "lane": "local", "after": [{"role": "user", "text": "how far away is the moon"}, {"role": "assistant", "text": "About 239,000 miles on average, sir."}]}
+{"id": "p195", "category": "correction", "prompt": "no the celtics", "lane": "lookup", "after": [{"role": "user", "text": "who won the bruins game"}, {"role": "assistant", "text": "The Bruins beat the Rangers 3 to 2 in a shootout last night, sir. Preseason, mind."}, {"role": "user", "text": "no the celtics"}]}
+{"id": "p196", "category": "correction", "prompt": "no sunset tomorrow", "lane": "live", "after": [{"role": "user", "text": "what's sunrise tomorrow"}, {"role": "assistant", "text": "6:43 tomorrow morning, sir."}]}
+{"id": "p197", "category": "correction", "prompt": "yeah ward", "lane": "local", "after": [{"role": "user", "text": "what does war do in magic"}, {"role": "assistant", "text": "War isn't a keyword I recognise, sir. Did you mean ward?"}]}
+{"id": "p198", "category": "correction", "prompt": "i meant quarts", "lane": "local", "after": [{"role": "user", "text": "how many cups in a gallon"}, {"role": "assistant", "text": "Sixteen."}]}
+{"id": "p199", "category": "correction", "prompt": "sorry 18 percent", "lane": "local", "after": [{"role": "user", "text": "what's 15 percent of 80"}, {"role": "assistant", "text": "12."}]}
+{"id": "p200", "category": "correction", "prompt": "no i meant the living room light", "lane": "home", "after": [{"role": "user", "text": "is the bedroom light on"}, {"role": "assistant", "text": "It is, sir."}]}
+{"id": "p201", "category": "correction", "prompt": "actually make that petg specifically", "lane": "card", "after": [{"role": "user", "text": "tell claude to find cheap filament"}, {"role": "assistant", "text": "Card 431 is in Claude's inbox, sir: find cheap filament."}]}
+{"id": "p202", "category": "stress", "prompt": "i'm so tired", "lane": "local"}
+{"id": "p203", "category": "stress", "prompt": "work was rough today", "lane": "local"}
+{"id": "p204", "category": "stress", "prompt": "i'm gonna be late", "lane": "local"}
+{"id": "p205", "category": "stress", "prompt": "how do i handle someone at work who's yelling at me", "lane": "claude"}
+{"id": "p206", "category": "stress", "prompt": "what's the max dose of narcan", "lane": "local"}
+{"id": "p207", "category": "stress", "prompt": "i can't sleep", "lane": "local"}
+{"id": "p208", "category": "stress", "prompt": "everything's going wrong today", "lane": "local"}
+{"id": "p209", "category": "stress", "prompt": "my car won't start", "lane": "local"}
+{"id": "p210", "category": "stress", "prompt": "i messed up at work today", "lane": "local"}
+{"id": "p211", "category": "stress", "prompt": "the print just failed nine hours in", "lane": "local"}
+{"id": "p212", "category": "stress", "prompt": "tell claude to draft an email to my boss asking for next friday off", "lane": "card"}
+{"id": "p213", "category": "stress", "prompt": "i'm overwhelmed with stuff", "lane": "local"}

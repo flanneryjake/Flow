@@ -351,6 +351,16 @@ def file_card(kind, what, said):
 
 # ----------------------------------------------------------------------------- one chat turn
 
+def jake_facts():
+    """training/jake-facts.md minus its heading and preamble: short standing facts fed every turn."""
+    try:
+        with open(os.path.join(HERE, 'training', 'jake-facts.md'), encoding='utf-8') as f:
+            lines = [l.rstrip() for l in f if l.lstrip().startswith('-')]
+        return '\n'.join(lines)[:2500]
+    except OSError:
+        return ''
+
+
 def humor():
     return int(read_json(STATE, {}).get('humor', 60))
 
@@ -396,6 +406,9 @@ def chat(text):
     now = dt.datetime.now()
     ctx = [f'Now: {now:%A, %B} {now.day}, {now.year}, {now:%I:%M %p}'.replace(' 0', ' ') +
            f' (yesterday was {now - dt.timedelta(days=1):%A %B %d}). Humor setting: {humor()}%.']
+    jf = jake_facts()
+    if jf:
+        ctx.append('About Jake (background; use it, don\'t recite it):\n' + jf)
     if summary:
         ctx.append('Memory of earlier conversations: ' + summary)
     lv = '' if fm else '\n'.join(x for x in (live.facts(text, log=log), home.facts(text)) if x)
