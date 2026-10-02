@@ -23,6 +23,7 @@ Use as a library (import ghq) or from the command line: python ghq.py --help
 """
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -82,6 +83,10 @@ class GitHubError(Exception):
     pass
 
 
+class RateLimited(GitHubError):
+    """GitHub said slow down (secondary or primary rate limit). Nothing is sent until the cooldown ends."""
+
+
 # ---------------------------------------------------------------------------- HTTP
 
 def _token():
@@ -91,8 +96,84 @@ def _token():
     return t
 
 
+# A rate-limit cooldown is shared by every process on this PC through a small file, so a blocked Worker,
+# hub and watchdog all wait it out instead of each hammering GitHub (which extends the block).
+STATE_DIR = os.environ.get('JARVIS_STATE_DIR') or (
+    os.path.join(os.environ.get('ProgramData', r'C:\ProgramData'), 'Jarvis') if os.name == 'nt'
+    else os.path.join(os.path.expanduser('~'), '.jarvis'))
+COOLDOWN_FILE = os.path.join(STATE_DIR, 'github-cooldown.json')
+WRITE_GAP = 1.0  # GitHub asks for at least 1 s between content writes from one client
+_LAST_WRITE = [0.0]
+
+
+def _state_read(path, default):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _state_write(path, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f'{path}.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # best effort: the in-process cooldown still applies
+
+
+_COOLDOWN = [0.0, 0]  # until (epoch s), consecutive strikes
+
+
+def cooldown_left():
+    """Seconds until GitHub may be called again (0 when not cooling down)."""
+    disk = _state_read(COOLDOWN_FILE, {})
+    until = max(_COOLDOWN[0], float(disk.get('until') or 0))
+    return max(0.0, until - time.time())
+
+
+def _start_cooldown(headers, detail):
+    """Back off after a 403/429 rate-limit answer: Retry-After if given, the primary reset time if that is the
+    limit, else 60 s doubling per strike in a row (max 15 min)."""
+    disk = _state_read(COOLDOWN_FILE, {})
+    strikes = int(disk.get('strikes') or 0) + 1 if time.time() - float(disk.get('until') or 0) < 600 else 1
+    wait = 0
+    retry_after = headers.get('Retry-After') or headers.get('retry-after')
+    if retry_after and str(retry_after).isdigit():
+        wait = int(retry_after)
+    elif str(headers.get('X-RateLimit-Remaining') or headers.get('x-ratelimit-remaining')) == '0':
+        wait = int(headers.get('X-RateLimit-Reset') or headers.get('x-ratelimit-reset') or 0) - int(time.time())
+    wait = min(max(wait, 60 * 2 ** (strikes - 1)), 900)
+    until = time.time() + wait
+    _COOLDOWN[:] = [until, strikes]
+    _state_write(COOLDOWN_FILE, {'until': until, 'strikes': strikes, 'why': detail[:200],
+                                 'set': now_iso(), 'pid': os.getpid()})
+    return wait
+
+
+def _is_rate_limit(code, detail, headers):
+    if code == 429:
+        return True
+    if code != 403:
+        return False
+    return 'rate limit' in detail.lower() or str(headers.get('X-RateLimit-Remaining') or
+                                                 headers.get('x-ratelimit-remaining')) == '0'
+
+
 def request(method, path, body=None, etag=None, graphql=False):
-    """Call the GitHub REST API. Returns (status, data, headers). 304 returns (304, None, headers)."""
+    """Call the GitHub REST API. Returns (status, data, headers). 304 returns (304, None, headers).
+    Raises RateLimited, without calling GitHub, while a rate-limit cooldown is running."""
+    left = cooldown_left()
+    if left > 0:
+        raise RateLimited(f'GitHub rate limit: waiting {int(left)} s more before {method} {path}')
+    if method != 'GET':
+        gap = WRITE_GAP - (time.time() - _LAST_WRITE[0])
+        if gap > 0:
+            time.sleep(gap)
+        _LAST_WRITE[0] = time.time()
     url = path if path.startswith('http') else API + path
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -116,6 +197,9 @@ def request(method, path, body=None, etag=None, graphql=False):
                 time.sleep(2 * (attempt + 1))
                 continue
             detail = e.read().decode(errors='replace')[:500]
+            if _is_rate_limit(e.code, detail, dict(e.headers)):
+                wait = _start_cooldown(dict(e.headers), detail)
+                raise RateLimited(f'GitHub rate limit on {method} {path}: pausing GitHub calls for {wait} s') from None
             raise GitHubError(f'{method} {path} -> {e.code}: {detail}') from None
         except urllib.error.URLError as e:
             if attempt < 2:
@@ -194,8 +278,71 @@ def set_status(number, status, extra_add=(), extra_remove=()):
     api('PUT', repo_path(f'/issues/{number}/labels'), {'labels': names})
 
 
-def comment(number, text):
-    return api('POST', repo_path(f'/issues/{number}/comments'), {'body': text})
+OUTBOX_FILE = os.path.join(STATE_DIR, 'github-outbox.json')
+SENT_FILE = os.path.join(STATE_DIR, 'github-sent.json')
+REPEAT_WINDOW = 6 * 3600  # the same text on the same card within 6 h is a loop, not news
+
+
+def _comment_key(number, text):
+    # Timestamps and claim nonces differ between otherwise identical comments, so drop them from the key.
+    norm = re.sub(r'\d{4}-\d\d-\d\dT[\d:.+Z-]+|\b[0-9a-f]{10}\b', '', text)
+    norm = re.sub(r'\s+', ' ', norm).strip()
+    return f'{number}:' + hashlib.sha1(norm.encode()).hexdigest()[:12]
+
+
+def _remember(key):
+    sent = {k: v for k, v in _state_read(SENT_FILE, {}).items() if time.time() - v < REPEAT_WINDOW}
+    sent[key] = time.time()
+    _state_write(SENT_FILE, sent)
+
+
+def flush_outbox(limit=5):
+    """Post comments queued during a rate-limit cooldown, oldest first. Called before each new comment."""
+    box = _state_read(OUTBOX_FILE, [])
+    if not box or cooldown_left() > 0:
+        return 0
+    sent = 0
+    while box and sent < limit:
+        item = box[0]
+        try:
+            api('POST', repo_path(f'/issues/{item["number"]}/comments'), {'body': item['text']})
+            _remember(item['key'])
+        except RateLimited:
+            break
+        except GitHubError as e:
+            print(f'outbox: dropped comment for #{item["number"]}: {e}', file=sys.stderr)
+        box.pop(0)
+        sent += 1
+        _state_write(OUTBOX_FILE, box)
+    return sent
+
+
+def comment(number, text, queue=True, dedupe=True):
+    """Post a comment. Returns the new comment, or None when it was skipped as a repeat or queued.
+
+    dedupe: the same text on the same card again within 6 h is skipped (that is a bounce loop, and loops are
+    what tripped GitHub's content-creation limit on 10/02). queue: during a rate-limit cooldown the comment is
+    saved and posted once the cooldown ends, instead of raising. Claims and progress comments pass
+    queue=False, dedupe=False because the caller needs the comment id."""
+    key = _comment_key(number, text)
+    if dedupe:
+        sent = _state_read(SENT_FILE, {})
+        if time.time() - float(sent.get(key) or 0) < REPEAT_WINDOW:
+            return None
+    try:
+        flush_outbox()
+        out = api('POST', repo_path(f'/issues/{number}/comments'), {'body': text})
+    except RateLimited:
+        if not queue:
+            raise
+        box = _state_read(OUTBOX_FILE, [])
+        if not any(i.get('key') == key for i in box):
+            box.append({'number': number, 'text': text, 'key': key, 'queued': now_iso()})
+            _state_write(OUTBOX_FILE, box[-200:])
+        return None
+    if dedupe:
+        _remember(key)
+    return out
 
 
 _LAST_WAKE = [0.0]
@@ -327,7 +474,8 @@ def claim(number, machine):
             any(n.startswith('claimed:') for n in label_names(current)):
         return False  # the cached queue was stale: someone else has it, or it was snoozed or closed
     nonce = uuid.uuid4().hex[:10]
-    mine = comment(number, f'<!-- jarvis:claim {machine} {nonce} -->\nClaimed by **{machine}** at {now_iso()}')
+    mine = comment(number, f'<!-- jarvis:claim {machine} {nonce} -->\nClaimed by **{machine}** at {now_iso()}',
+                   queue=False, dedupe=False)
     comments = paged(repo_path(f'/issues/{number}/comments'))
     since_last_run = []
     for c in comments:
@@ -489,8 +637,11 @@ def open_followups(parent):
 
 def approve(number, by='hub'):
     """Approve a card. The phone hub checks the PIN itself before calling this for a card labelled 'pin'."""
+    current = api('GET', repo_path(f'/issues/{number}'))
+    if current.get('state') == 'open' and status_of(current) in ('approved', 'working'):
+        return  # a double tap or a retried request: already approved, so no second label write or comment
     set_status(number, 'approved')
-    comment(number, f'Approved via {by} at {now_iso()}')
+    comment(number, f'Approved via {by} at {now_iso()}', dedupe=False)
     wake()
 
 
@@ -632,7 +783,7 @@ def snooze_until(number, kind, value, machine, reason='', producer=None):
     comment(number, f'<!-- jarvis:snooze {json.dumps(meta)} -->\n**Snoozed until {what}**' +
                     (f'\n\n{reason.strip()}' if reason else '') +
                     (f'\n\nMade by #{producer}.' if producer and kind == 'file' else '') +
-                    '\n\nIt goes back to approved by itself when that happens. No action needed from Jake.')
+                    '\n\nIt goes back to approved by itself when that happens. No action needed from Jake.', dedupe=False)
     return value
 
 
@@ -892,7 +1043,7 @@ def progress(number, machine, text, comment_id=None):
             return comment_id
         except GitHubError:
             pass  # deleted by hand: start a new one
-    return comment(number, body)['id']
+    return comment(number, body, queue=False, dedupe=False)['id']
 
 
 def jake_now(title, body='', machine='homebase'):
