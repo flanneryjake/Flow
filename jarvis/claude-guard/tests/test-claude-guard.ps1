@@ -88,6 +88,11 @@ Check 'rig: --print children of the server are its sessions' ($g.counts.rc_sessi
 Check 'rig: a -p call inside a session is part of it' ((Proc $g 960).role -eq 'nested' -and $g.counts.headless -eq 0)
 Check 'rig: one server' ($g.counts.listeners -eq 1)
 
+# Rig, 10/02: sessions whose flags contain the word remote-control (--remote-control-session-id) are sessions.
+Remove-Item $state -Recurse -Force -ErrorAction SilentlyContinue
+$h = Run 'rig-sessions.json' '2026-10-02T23:00:00Z'
+Check 'rig: --remote-control-session-* children are sessions, not servers' ($h.counts.rc_sessions -eq 3 -and $h.counts.listeners -eq 1 -and (Proc $h 970).role -eq 'rc-session')
+
 # A lone listener with no sessions is never a duplicate.
 Remove-Item $state -Recurse -Force -ErrorAction SilentlyContinue
 $r4 = Run 'clean.json' '2026-10-02T23:00:00Z'

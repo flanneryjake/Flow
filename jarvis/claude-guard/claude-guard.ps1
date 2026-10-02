@@ -166,6 +166,10 @@ $cliParents = @{}
 foreach ($p in $procs) { if ((Test-Cli $p) -and $byPid[$p.ppid]) { $cliParents[$p.ppid] = $true } }
 $printRx = '(^|\s)(-p|--print)(\s|$)'
 $bridgeRx = '--sdk-url|--input-format[ =]stream-json|--remote-control-session|--session-ingress'
+# The `remote-control` subcommand itself, not a flag that contains the word (sessions it spawns carry e.g.
+# --remote-control-session-...). A process with session flags is never the server.
+$rcRx = '(^|\s|")remote-control("|\s|$)'
+function Test-RcServer($x) { return ($x.cmd -match $rcRx -and $x.cmd -notmatch "$printRx|$bridgeRx") }
 $items = New-Object System.Collections.Generic.List[object]
 foreach ($p in $procs) {
     $isDesk = Test-Desktop $p
@@ -176,16 +180,16 @@ foreach ($p in $procs) {
     $role = $null; $owner = $null
     if ($isDesk) {
         $role = if ($anc | Where-Object { Test-Desktop $_ }) { 'desktop-helper' } else { 'desktop' }
-    } elseif ($p.cmd -match '\bremote-control\b') {
+    } elseif (Test-RcServer $p) {
         # The same server can show up as two processes (a launcher such as ~\.local\bin\claude.exe or a
         # node shim, and the real binary it starts with the same arguments). Only the top one is the server.
         $cliAnc = $anc | Where-Object { Test-Cli $_ } | Select-Object -First 1
-        if ($cliAnc -and $cliAnc.cmd -match '\bremote-control\b') { $role = 'nested'; $owner = $cliAnc.pid }
+        if ($cliAnc -and (Test-RcServer $cliAnc)) { $role = 'nested'; $owner = $cliAnc.pid }
         else { $role = 'listener' }
     } else {
         $cliAnc = $anc | Where-Object { Test-Cli $_ } | Select-Object -First 1
         $deskAnc = $anc | Where-Object { Test-Desktop $_ } | Select-Object -First 1
-        $topRc = @($anc | Where-Object { (Test-Cli $_) -and $_.cmd -match '\bremote-control\b' }) | Select-Object -Last 1
+        $topRc = @($anc | Where-Object { (Test-Cli $_) -and (Test-RcServer $_) }) | Select-Object -Last 1
         if ($topRc) {
             # Somewhere under a Remote Control server. The server may sit behind a launcher child whose command
             # line doesn't say remote-control, and a session may run its own claude children (hooks, -p calls).
