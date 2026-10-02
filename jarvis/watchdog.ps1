@@ -389,7 +389,7 @@ $waitingNames = @()
 $waiting = $null
 if (-not $ghTok) {
     $alerts.Add('GITHUB_TASKS_TOKEN is not set; waiting cards unknown and health not reported')
-} else {
+} elseif ($machine -ne 'backup') {  # the backup box runs no Worker, so it skips the queue calls
     try {
         # Only open approved cards are needed for the count (state=all paged up to 10 calls every run, which
         # mattered once the shared token started hitting GitHub's hourly limit).
@@ -478,6 +478,11 @@ elseif ($hbWorker -match '^IDLE-REASON:?\s*(.*)$') {
     elseif ($worker -ne 'Paused (usage limit)') { $worker = 'Idle with cards waiting' }
 }
 
+if ($machine -eq 'backup') {
+    # No Worker on the backup box (Home Assistant, Mosquitto, wake relay only): never report it idle or
+    # waiting on Jake, or its health issue would carry an alert and the 5060 would push it to Jake's phone.
+    $worker = 'backup (off)'; $hbWorker = $null; $hbIdle = $null; $needsJake = $null; $waiting = $null
+}
 $claimText = if ($lastClaim) { $lastClaim.ToString('MM/dd HH:mm') } else { 'never' }
 $workerLine = "Worker: $worker"
 if ($worker -eq 'Paused (usage limit)') { $workerLine += " until $($pausedUntil.ToString('MM/dd HH:mm'))" }
