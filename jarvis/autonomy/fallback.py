@@ -1,6 +1,6 @@
 """Keep the rig useful while Claude is out of usage.
 
-When the Worker log says the account hit its limit ("usage limit", "WAITING: usage resets ..."), Claude cards
+When the Worker log says the account hit its limit ("You've hit your usage limit", "WAITING: usage resets ..."), Claude cards
 can't run until the reset. Instead of idling, the rig's local-model lane switches to:
   * research cards, and
   * "next project" drafting cards,
@@ -36,8 +36,11 @@ from scheduler import kind_of  # noqa: E402
 
 LOCAL_LABEL = 'model:local'
 LANE_LABEL = 'lane:fallback'
-USAGE = re.compile(r"usage limit|WAITING: usage resets|limit (?:reached|hit)[^\n]{0,40}resets|"
-                   r"you(?:'ve| have) (?:hit|reached) your (?:usage )?limit|\b5-hour limit\b", re.I)
+# Only the Worker's own usage-limit markers and Claude's limit error count. Bare words like "usage limit" or
+# "5-hour limit" also show up in card titles and card output (e.g. "Fix usage limit stalls"), and Jake's 10/02
+# rule is that only a real Claude usage-limit error pauses Claude cards.
+USAGE = re.compile(r"WAITING: usage resets|you(?:'ve| have) (?:hit|reached) your (?:usage |session )?limit|"
+                   r"\b(?:usage|session) limit (?:reached|hit)[^\n]{0,40}resets", re.I)
 RESETS = re.compile(r'resets?(?: at)?\s+([0-9]{1,2}(?::[0-9]{2})?\s*[ap]\.?m\.?(?:\s*\([^)]*\))?|'
                     r'[0-9]{1,2}:[0-9]{2}(?:\s*\([^)]*\))?)', re.I)
 NEXT_PROJECT = re.compile(r'\bnext[- ]project\b', re.I)

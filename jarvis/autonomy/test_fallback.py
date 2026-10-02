@@ -24,6 +24,9 @@ class FallbackTest(unittest.TestCase):
         self.assertEqual(fallback.detect(LIMITED), (True, '8pm (America/New_York)'))
         self.assertEqual(fallback.detect('all fine\n**Run on rig: done**'), (False, ''))
         self.assertFalse(fallback.detect(LIMITED + '[20:01] claimed #41\n')[0])   # it reset and ran again
+        # card titles and card output that only mention limits are not a usage-limit error
+        self.assertFalse(fallback.detect('[18:00] Card #437 Fix usage limit stalls: notes on the 5-hour limit')[0])
+        self.assertTrue(fallback.detect("[19:02] paused (You've hit your session limit, resets 7:10pm)")[0])
 
     def test_allowed_only_local_research_or_next_project_on_rig(self):
         st = {'mode': 'local-fallback', 'machine': 'rig'}
