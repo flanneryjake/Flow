@@ -30,6 +30,10 @@ class FakeHA(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         FakeHA.calls.append(("GET", self.path, self.headers.get("Authorization")))
+        if self.path.startswith("/api/history/") and "filter_entity_id=" not in self.path:
+            self.send_response(400)   # like HA 2026.9
+            self.end_headers()
+            return
         self._send([KITCHEN, TV] if self.path == "/api/states" else [[KITCHEN]])
 
     def do_POST(self):

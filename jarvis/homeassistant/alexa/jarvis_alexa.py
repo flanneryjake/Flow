@@ -147,10 +147,16 @@ def slim(state):
 def export_day(token, day):
     start = dt.datetime.combine(day, dt.time.min).astimezone()
     end = start + dt.timedelta(days=1)
-    path = "/api/history/period/%s?%s" % (
-        urllib.parse.quote(start.isoformat()),
-        urllib.parse.urlencode({"end_time": end.isoformat(), "significant_changes_only": "0"}))
-    groups = _request("GET", path, token=token, timeout=120) or []
+    # HA 2026.9 rejects a history query without filter_entity_id (400), so name the entities, in batches.
+    ids = sorted(s["entity_id"] for s in _request("GET", "/api/states", token=token) or []
+                 if s["entity_id"].split(".", 1)[0] not in SKIP_DOMAINS)
+    groups = []
+    for i in range(0, len(ids), 50):
+        path = "/api/history/period/%s?%s" % (
+            urllib.parse.quote(start.isoformat()),
+            urllib.parse.urlencode({"filter_entity_id": ",".join(ids[i:i + 50]), "end_time": end.isoformat(),
+                                    "significant_changes_only": "0"}))
+        groups += _request("GET", path, token=token, timeout=120) or []
     rows = [r for g in groups for r in (slim(s) for s in g) if r]
     rows.sort(key=lambda r: r["t"] or "")
     os.makedirs(ROUTINE_DIR, exist_ok=True)
