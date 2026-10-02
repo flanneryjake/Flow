@@ -30,7 +30,7 @@ class StatsTest(unittest.TestCase):
         a.cpu_percent()
         s = a.read_state()
         self.assertTrue(0 <= s["memory"] <= 100)
-        self.assertGreater(s["uptime"], 0)
+        self.assertGreaterEqual(s["uptime"], 0)  # a freshly booted box rounds to 0.0 h
 
 
 if __name__ == "__main__":
