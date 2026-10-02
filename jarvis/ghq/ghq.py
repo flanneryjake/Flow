@@ -558,15 +558,21 @@ def snooze_until(number, kind, value, machine, reason='', producer=None):
                                  'pass a full path or producer=<card that makes the file>')
             value = full_output_path(value, producer)
             set_output_path(producer, value, waiting=number)
+        elif os.path.exists(value):
+            raise ValueError(f'`{value}` already exists, so there is nothing to wait for')
         what = f'this file exists on {machine}: `{value}`'
     elif kind == 'card':
         value = int(str(value).lstrip('#'))
         if value == number:
             raise ValueError('a card cannot wait on itself')
+        if api('GET', repo_path(f'/issues/{value}')).get('state') == 'closed':
+            raise ValueError(f'#{value} is already done, so there is nothing to wait for')
         what = f'#{value} is done'
         producer = producer or value
     elif kind == 'machine':
         value = machine_name(value)
+        if value == machine:
+            raise ValueError(f'#{number} is already on {value}; waiting for {value} to be online would wake at once')
         if value in MACHINES:
             # "Run this on the rig" means the card belongs to that PC: move it there, or the snoozing Worker
             # (machine:any) claims it again the moment it wakes. If that PC is already up, nothing to wait for.
@@ -581,7 +587,10 @@ def snooze_until(number, kind, value, machine, reason='', producer=None):
             api('PUT', repo_path(f'/issues/{number}/labels'), {'labels': keep + [f'machine:{value}']})
         what = f'**{value}** is online'
     else:
-        value = _parse_iso(value).replace(microsecond=0).isoformat()
+        when = _parse_iso(value).replace(microsecond=0)
+        if when <= dt.datetime.now(dt.timezone.utc):
+            raise ValueError(f'{when.isoformat()} has already passed')
+        value = when.isoformat()
         what = f'{value}'
     meta = {'kind': kind, 'value': value, 'machine': machine, 'since': now_iso(), 'producer': producer}
     if kind == 'file':
