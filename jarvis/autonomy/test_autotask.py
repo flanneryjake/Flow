@@ -18,6 +18,35 @@ class AutotaskTest(unittest.TestCase):
     def use(self, g):
         autotask._ghq = lambda: g
 
+    def test_loop_meta_card_is_dropped(self):
+        g = fake_ghq(); self.use(g)
+        n, status, why = autotask.propose('Pause re-approval of card #23')
+        self.assertEqual((n, status), (None, 'dropped'))
+        self.assertEqual(g.issues, {}) if isinstance(g.issues, dict) else self.assertFalse(g.issues)
+        self.assertEqual(g.posted, [])
+
+    def test_new_card_refusal_is_dropped(self):
+        g = fake_ghq(); self.use(g)
+        g.new_card = lambda *a, **k: None
+        n, status, why = autotask.propose('Test ff_printer.py against the real printer')
+        self.assertEqual((n, status), (None, 'dropped'))
+        self.assertEqual(g.posted, [])
+
+    def test_ghq_side_duplicate_is_not_commented(self):
+        g = fake_ghq(); self.use(g)
+        g.new_card = lambda *a, **k: 41
+        g.LAST_NEW_CARD_WAS_NEW = False
+        n, status, why = autotask.propose('Test ff_printer.py against the real printer')
+        self.assertEqual((n, status), (41, 'duplicate'))
+        self.assertEqual(g.posted, [])
+
+    def test_burst_sees_card_filed_moments_ago(self):
+        g = fake_ghq(); self.use(g)
+        a = autotask.propose('Test ff_printer.py against the real printer')
+        b = autotask.propose('Test ff_printer.py against the real printer')
+        self.assertEqual(b[1], 'duplicate')
+        self.assertEqual(b[0], a[0])
+
     def test_free_card_is_approved_and_wakes(self):
         g = fake_ghq(); self.use(g)
         n, status, why = autotask.propose('Test ff_printer.py against the real printer', machine='rig')

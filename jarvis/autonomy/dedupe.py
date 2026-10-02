@@ -154,17 +154,36 @@ def log_reject(title, number, status, reason, source='autotask'):
     return rec
 
 
+_CACHE = {'at': 0.0, 'issues': None, 'src': None}
+CACHE_S = 120  # one open + recently-closed listing per process every 2 minutes, not one per proposed card
+
+
 def gather(ghq, title, now=None):
-    """Fetch what `check` needs from the queue: (issues, comments_of, selftest_history)."""
+    """Fetch what `check` needs from the queue: (issues, comments_of, selftest_history). The open and recently
+    closed list is cached for CACHE_S seconds per process; remember() adds cards filed meanwhile."""
+    import time
     now = now or clock.now_utc()
-    since = clock.iso(now - dt.timedelta(days=WINDOW_DAYS))
-    issues = ghq.paged(ghq.repo_path('/issues?state=open'))
-    issues += ghq.paged(ghq.repo_path(f'/issues?state=closed&since={since}'))
+    if _CACHE['issues'] is None or _CACHE['src'] is not ghq or time.time() - _CACHE['at'] > CACHE_S:
+        since = clock.iso(now - dt.timedelta(days=WINDOW_DAYS))
+        issues = ghq.paged(ghq.repo_path('/issues?state=open'))
+        issues += ghq.paged(ghq.repo_path(f'/issues?state=closed&since={since}'))
+        _CACHE.update(at=time.time(), issues=issues, src=ghq)
+    issues = list(_CACHE['issues'])
     history = ghq.paged(ghq.repo_path('/issues?state=closed')) if is_selftest(title) else []
 
     def comments_of(n):
         return [c.get('body') or '' for c in ghq.paged(ghq.repo_path(f'/issues/{n}/comments'))]
     return issues, comments_of, history
+
+
+def remember(issue):
+    """Add a card just filed to the cached list, so the next proposal in the same burst sees it."""
+    if _CACHE['issues'] is not None:
+        _CACHE['issues'].append(issue)
+
+
+def forget_cache():
+    _CACHE.update(at=0.0, issues=None, src=None)
 
 
 def main(argv=None):

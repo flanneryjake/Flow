@@ -42,6 +42,9 @@ AUTO_LABEL_SPEC = ('0e8a16', 'Filed and approved by Jarvis under the guardrail p
 SPAWN_RE = re.compile(r'Spawned from #(\d+)')
 DEFERRED_LABEL = 'sched:deferred'
 DEFAULT_PER_DAY = 100
+# Cards about a loop itself ("stop re-approving #23"). snooze_until / send_back in ghq handle loops now, so
+# these are never filed (same rule as ghq.META_FOLLOWUP_RE).
+META_RE = re.compile(r're-?approv|stop (re-?)?running|pause (re-?)?approval|keeps? (looping|bouncing)', re.I)
 
 
 def _ghq():
@@ -118,7 +121,11 @@ def propose(title, body='', machine='any', priority=None, card_type='task', spaw
             extra_labels=()):
     """File a card, approving it when policy allows. Returns (number, status, why); status 'duplicate' (an open
     or recently closed card matches) or 'rejected' (a selftest that already failed by hand) files nothing and
-    returns the existing card's number."""
+    returns the existing card's number. Status 'dropped' (a card about a loop, or ghq.new_card refused it) files
+    nothing and returns None as the number: callers must not comment on or count it."""
+    if META_RE.search(title or ''):
+        dedupe.log_reject(title, None, 'dropped', 'a card about a loop; snooze/send_back handle those', source=source)
+        return None, 'dropped', 'loop meta-card'
     ghq = _ghq()
     issues, comments_of, history = dedupe.gather(ghq, title)
     hit = dedupe.check(title, body, issues, comments_of=comments_of, selftest_history=history)
@@ -136,6 +143,14 @@ def propose(title, body='', machine='any', priority=None, card_type='task', spaw
         ensure_label(ghq)
     number = ghq.new_card(title, body, machine=machine, priority=priority, status=status, card_type=card_type,
                           pin=(tier == 'pin'), spawned_from=spawned_from, extra_labels=extra)
+    if number is None:
+        dedupe.log_reject(title, None, 'dropped', 'ghq.new_card refused it', source=source)
+        return None, 'dropped', 'refused by ghq.new_card'
+    if not getattr(ghq, 'LAST_NEW_CARD_WAS_NEW', True):
+        dedupe.log_reject(title, number, 'duplicate', f'ghq found a similar open card #{number}', source=source)
+        return number, 'duplicate', f'similar open card #{number}'
+    dedupe.remember({'number': number, 'title': title, 'body': body, 'state': 'open', 'labels': extra,
+                     'created_at': ghq.now_iso()})
     verdict = 'Auto-approved' if status == 'approved' else 'Filed for Jake'
     ghq.comment(number, f'{verdict} by {source} at {ghq.now_iso()}: {why}.')
     if status == 'approved':
