@@ -6,7 +6,7 @@
 - Memory: `C:\Jarvis\tars\history.jsonl` (every turn) + `summary.json` (rolling summary of turns older than the last 20).
 - Facts: task/status/history questions read flanneryjake/jarvis-tasks (read-only) with `GITHUB_TASKS_TOKEN`.
 - Filing: "start researching X" / "tell Claude X" files a `status:inbox` card (`for:claude` for Claude asks).
-- Iron Man persona: `jarvis-ironman` (`Modelfile.ironman`, FROM baby-jarvis). Rebuild: `ollama create jarvis-ironman -f Modelfile.ironman`.
+- Iron Man persona: `jarvis-ironman` (`Modelfile.ironman`, FROM tars:v1). Rebuild: `ollama create jarvis-ironman -f Modelfile.ironman`.
   Turns and memory older than `JARVIS_PERSONA_SINCE` (old Boston voice) are never fed to the model; the files stay as they are.
 - Live facts (`live.py`): sunrise/sunset are computed for Plymouth, MA; weather comes from the National Weather Service
   (api.weather.gov, free, no key). Both go into the context as a LIVE block, so no web search is needed.

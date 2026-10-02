@@ -40,16 +40,17 @@ SUMMARY = os.path.join(HERE, 'summary.json')
 STATE = os.path.join(HERE, 'state.json')
 LOG = os.path.join(HERE, 'tars.log')
 MODEL = os.environ.get('TARS_MODEL', 'jarvis-ironman:latest')
+SUMMARY_MODEL = os.environ.get('TARS_SUMMARY_MODEL', 'tars:latest')
 OLLAMA = os.environ.get('OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
 BIND = os.environ.get('TARS_BIND', '127.0.0.1')
 PORT = int(os.environ.get('TARS_PORT', '8790'))
 REPO = os.environ.get('JARVIS_TASKS_REPO', 'flanneryjake/jarvis-tasks')
 WINDOW = 20                 # turns fed verbatim
 SUMMARIZE_EVERY = 10        # fold older turns into the summary once this many have dropped out of the window
-HEARTBEAT = r'C:\Jarvis\worker.heartbeat'
+HEARTBEAT = r'C:\Jarvis\laptop-worker.heartbeat'
 JOBS_LOG = os.path.join(os.path.expanduser('~'), 'JarvisAgent', 'logs', 'laptop-jobs.jsonl')
 # Turns and memory from before the Iron Man persona went live carry the old Boston voice; the model never sees them.
-PERSONA_SINCE = os.environ.get('JARVIS_PERSONA_SINCE', '2026-10-02T17:20:00')
+PERSONA_SINCE = os.environ.get('JARVIS_PERSONA_SINCE', '2026-10-02T18:30:00')   # after the #952 test chatter
 
 model_lock = threading.Lock()
 file_lock = threading.Lock()
@@ -119,7 +120,7 @@ def maybe_summarize():
               'At most 180 words, plain sentences.\n\nCURRENT MEMORY:\n' + (s['summary'] or '(empty)') +
               '\n\nNEW TURNS:\n' + chunk[-12000:] + '\n\nUPDATED MEMORY:')
     try:
-        new = ollama_chat([{'role': 'user', 'content': prompt}], model='baby-jarvis:latest', temperature=0.2,
+        new = ollama_chat([{'role': 'user', 'content': prompt}], model=SUMMARY_MODEL, temperature=0.2,
                           num_predict=400)
         write_json(SUMMARY, {'summary': new.strip(), 'upto': cut, 'at': dt.datetime.now().isoformat(timespec='seconds')})
         log(f'summary updated through turn {cut}')
@@ -134,7 +135,7 @@ def ollama_chat(messages, model=MODEL, temperature=None, num_predict=300):
     if temperature is not None:
         opts['temperature'] = temperature
     body = {'model': model, 'stream': False, 'think': False, 'messages': messages, 'options': opts,
-            'keep_alive': '30m'}
+            'keep_alive': '24h'}
     req = urllib.request.Request(f'{OLLAMA}/api/chat', data=json.dumps(body).encode('utf-8'),
                                  headers={'Content-Type': 'application/json'})
     with model_lock, urllib.request.urlopen(req, timeout=180) as r:
@@ -309,6 +310,9 @@ def window_hours(text):
     return 12
 
 
+BOARD_TALK_RE = re.compile(r"\b(cards?\s*#?\d+|#\d{2,}|idl(?:e|ing)\b.{0,40}\b(?:5060|laptop|rig)|watchdog|"
+                           r"migration|the queue)", re.I)
+
 # Only questions about the board or the machines get FACTS; "sunset tonight" or "how's it going" must not drag the
 # queue into small talk.
 TASK_WORDS = re.compile(
@@ -385,6 +389,8 @@ def chat(text):
 
     fx = facts(text) if (TASK_WORDS.search(text) and not fm) else ''
     turns = [t for t in load_turns()[:-1] if t.get('at', '') >= PERSONA_SINCE][-WINDOW:]
+    if not TASK_WORDS.search(text):   # small talk: earlier board chatter ("card 256 finished") stays out of it
+        turns = [t for t in turns if not BOARD_TALK_RE.search(t['text'])]
     mem = read_json(SUMMARY, {})
     summary = mem.get('summary', '') if mem.get('at', '') >= PERSONA_SINCE else ''
     now = dt.datetime.now()

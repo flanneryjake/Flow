@@ -67,7 +67,20 @@ def sun_fact(text, now=None):
     if not times:
         return ''
     which = 'tomorrow' if day != now.date() else 'today'
-    return f'Sun in {PLACE} {which} ({day:%a %b %d}): sunrise {_clock(times[0])}, sunset {_clock(times[1])} (computed).'
+    out = f'Sun in {PLACE} {which} ({day:%a %b %d}): sunrise {_clock(times[0])}, sunset {_clock(times[1])} (computed).'
+    if which == 'today':
+        for name, t in (('sunrise', times[0]), ('sunset', times[1])):
+            mins = round((t - now).total_seconds() / 60)
+            out += (f' {name.title()} is {_span(mins)} from now.' if mins >= 0 else
+                    f' {name.title()} was {_span(-mins)} ago.')
+    return out
+
+
+def _span(mins):
+    if mins < 60:
+        return f'{mins} minute' + ('' if mins == 1 else 's')
+    h, m = divmod(mins, 60)
+    return f'{h} hour' + ('' if h == 1 else 's') + (f' {m} minutes' if m else '')
 
 
 # ----------------------------------------------------------------------------- weather (api.weather.gov)
