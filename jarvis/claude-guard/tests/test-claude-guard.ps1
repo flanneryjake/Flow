@@ -80,6 +80,14 @@ $u2 = Run 'incident-run2.json' '2026-10-02T23:05:00Z'
 Check 'unknown task copy: extra server reported, not stopped' ((Proc $u2 300).action -eq '' -and (Proc $u2 300).why -like '*could not be identified*')
 $env:GUARD_TEST_TASK_ENGINE = '200'
 
+# Rig layout: server -> real binary (no remote-control in its command line) -> 3 --print sessions, one running a -p hook.
+Remove-Item $state -Recurse -Force -ErrorAction SilentlyContinue
+$g = Run 'rig-launcher.json' '2026-10-02T23:00:00Z'
+Check 'rig: launcher child is nested' ((Proc $g 950).role -eq 'nested')
+Check 'rig: --print children of the server are its sessions' ($g.counts.rc_sessions -eq 3 -and (Proc $g 951).owner -eq 202)
+Check 'rig: a -p call inside a session is part of it' ((Proc $g 960).role -eq 'nested' -and $g.counts.headless -eq 0)
+Check 'rig: one server' ($g.counts.listeners -eq 1)
+
 # A lone listener with no sessions is never a duplicate.
 Remove-Item $state -Recurse -Force -ErrorAction SilentlyContinue
 $r4 = Run 'clean.json' '2026-10-02T23:00:00Z'
