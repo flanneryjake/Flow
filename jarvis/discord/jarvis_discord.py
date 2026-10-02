@@ -332,8 +332,10 @@ class JarvisBot(discord.Client):
         if first_run:
             staged = sum(1 for _, s, _ in events if s == 'staged')
             needs = len(events) - staged
-            await self.send_alert(f'Jarvis is connected. Right now {staged} card(s) are waiting for approval and '
-                                  f'{needs} need an answer from you: https://github.com/{REPO}/issues')
+            sent = await self.send_alert(f'Jarvis is connected. Right now {staged} card(s) are waiting for approval and '
+                                         f'{needs} need an answer from you: https://github.com/{REPO}/issues')
+            if not sent:
+                return  # not in a server yet: say hello on a later check instead of losing it
         else:
             for number, status, issue in events[:10]:  # a burst (e.g. the nightly batch) posts 10 and a summary
                 await self.post_card(number, status, issue)
