@@ -249,7 +249,12 @@ if ($rcState -eq 'Down' -and (Test-Path $rcDebug)) {
 }
 
 # --- 2. Listening ports ---------------------------------------------------------------
-$ports = if ($machine -in 'rig', 'laptop') { @{ 'ollama' = 11434 } } else { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790 } }
+$ports = switch ($machine) {
+    'rig'    { @{ 'ollama' = 11434 } }
+    'laptop' { @{ 'ollama' = 11434 } }
+    'backup' { @{ 'home assistant' = 8123; 'mqtt' = 1883; 'wake relay' = 8767 } }
+    default  { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790; 'ollama' = 11434 } }
+}
 $portStatus = foreach ($k in $ports.Keys) {
     $up = Get-NetTCPConnection -State Listen -LocalPort $ports[$k] -ErrorAction SilentlyContinue
     "$k :$($ports[$k]) " + $(if ($up) { 'up' } else { 'DOWN' })
