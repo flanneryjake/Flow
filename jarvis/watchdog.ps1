@@ -360,29 +360,45 @@ if (-not $ghTok) {
     $alerts.Add('GITHUB_TASKS_TOKEN is not set; waiting cards unknown and health not reported')
 } else {
     try {
+        # Only open approved cards are needed for the count (state=all paged up to 10 calls every run, which
+        # mattered once the shared token started hitting GitHub's hourly limit).
         $issues = @(); $page = 1
         do {
-            $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=all&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30)
+            $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=open&labels=status:approved&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30 | ForEach-Object { $_ })
             $issues += $batch; $page++
         } while ($batch.Count -eq 100 -and $page -le 10)
         $issues = @($issues | Where-Object { -not $_.pull_request })
         $ghReady = @($issues | Where-Object {
             $n = @($_.labels | ForEach-Object { $_.name })
-            $_.state -eq 'open' -and $n -contains 'status:approved' -and -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
+            -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
                 ($n -contains 'machine:any' -or $n -contains "machine:$machine" -or -not @($n | Where-Object { $_ -like 'machine:*' }))
         })
         $waiting = $ghReady.Count
         $waitingNames = @($ghReady | ForEach-Object { "#$($_.number) $($_.title)" })
 
-        # Newest claim by this machine, and whether a run was logged after it.
-        $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30)
-        $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+        # Newest claim by this machine, and whether a run was logged after it. Look on the cards this machine
+        # holds right now first (label claimed:<machine>); the repo-wide newest-100 comments are only a fallback,
+        # because follow-up comments from all PCs push claims out of that window within minutes.
+        $claimC = $null; $cm = @(); $claimIssue = $null
+        $held = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=open&labels=claimed:$machine&sort=updated&direction=desc&per_page=5" -Headers $ghHdr -TimeoutSec 30 | ForEach-Object { $_ })
+        if ($held.Count) {
+            $claimIssue = $held[0]
+            $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/$($claimIssue.number)/comments?per_page=100" -Headers $ghHdr -TimeoutSec 30 | ForEach-Object { $_ })
+            [array]::Reverse($cm)
+            $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+        }
+        if (-not $claimC) {
+            $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30 | ForEach-Object { $_ })
+            $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+            $claimIssue = $null
+        }
         if ($claimC) {
             $t = ([datetime]$claimC.created_at).ToLocalTime()
             if (-not $lastClaim -or $t -gt $lastClaim) {
                 $lastClaim  = $t
                 $num        = [int](($claimC.issue_url -split '/')[-1])
-                $lastTitle  = "#$num " + "$(($issues | Where-Object { $_.number -eq $num } | Select-Object -First 1).title)"
+                $titleSrc   = if ($claimIssue) { $claimIssue } else { $issues | Where-Object { $_.number -eq $num } | Select-Object -First 1 }
+                $lastTitle  = "#$num " + "$($titleSrc.title)"
                 $claimLogAt = $null
                 $runC = $cm | Where-Object { $_.issue_url -eq $claimC.issue_url -and "$($_.body)" -match "jarvis:runmeta \{[^}]*`"machine`": `"$machine`"" } | Select-Object -First 1
                 if ($runC) { $claimLogAt = ([datetime]$runC.created_at).ToLocalTime() }
