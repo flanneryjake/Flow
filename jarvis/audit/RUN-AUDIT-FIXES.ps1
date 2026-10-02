@@ -51,11 +51,17 @@ function Restart-Task([string]$name) {
 }
 Log "=== RUN-AUDIT-FIXES start (Flow ref $Ref, backups in $bak) ==="
 
+# 0. Tell agent.py's self-edit guard that these changes are intended (it reverts ghq/agent edits made
+#    during a card unless this flag was touched within 60 s of it). The flag stays in place.
+function Touch-Flag { $f = Join-Path $audit 'fixes-running.flag'; if (-not (Test-Path $f)) { New-Item -ItemType File -Path $f | Out-Null }; (Get-Item $f).LastWriteTime = Get-Date }
+Step 'fixes-running flag' { Touch-Flag }
+
 # 1. ghq with PR #31 (dedupe, snooze, homebase/backup names), staged by the app-notes thread
 Step 'ghq.py (PR #31)' {
     $staged = 'C:\Users\Jake\AppData\Local\Temp\claude-merge\ghq.staged.py'
     if (-not (Test-Path $staged)) { return 'SKIP: no staged ghq.py' }
     & python -m py_compile $staged; if ($LASTEXITCODE) { throw 'staged ghq.py does not compile' }
+    Touch-Flag
     Backup 'C:\Jarvis\ghq\ghq.py'
     Copy-Item $staged 'C:\Jarvis\ghq\ghq.py' -Force
 }
