@@ -549,6 +549,8 @@ $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding 
 $notifyUrls = @('http://127.0.0.1:8770/api/notify', 'http://127.0.0.1:8765/api/notify')
 function Send-Push([string]$title, [string]$text) {
     $json = @{ title = $title; body = $text; message = $text; tag = 'jarvis-health'; url = "https://github.com/$ghRepo/issues?q=is%3Aopen+label%3Ahealth" } | ConvertTo-Json
+    # Copy to #jarvis-alerts in Discord when the Discord bot runs here (jarvis/discord); best effort.
+    try { Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8796/notify' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 10 | Out-Null } catch {}
     foreach ($u in $notifyUrls) {
         try {
             Invoke-RestMethod -Method Post -Uri $u -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 10 | Out-Null
