@@ -315,5 +315,21 @@ class GhqTest(unittest.TestCase):
         self.assertEqual((top['number'], top['runs'], top['minutes']), (c, 1, 6.0))
 
 
+class CleanPathTest(unittest.TestCase):
+    def test_strips_descriptions_and_quotes(self):
+        self.assertEqual(ghq.clean_path('`C:\\Jarvis\\card-25\\scan.csv (raw bulk scanner output)`'),
+                         'C:\\Jarvis\\card-25\\scan.csv')
+        self.assertEqual(ghq.clean_path('"scan.csv - the export"'), 'scan.csv')
+        self.assertEqual(ghq.clean_path('C:\\My Files\\a-b.csv'), 'C:\\My Files\\a-b.csv')
+
+    def test_full_output_path_drops_description(self):
+        self.assertTrue(ghq.full_output_path('scan.csv (raw output)', 25).endswith('card-25' + ('\\' if '\\' in ghq.OUTPUT_ROOT else '/') + 'scan.csv'))
+
+    def test_old_record_with_description_still_wakes(self):
+        seen = []
+        ok = ghq.condition_met({'kind': 'file', 'value': '/x/scan.csv (raw)'}, exists=lambda p: seen.append(p) or p == '/x/scan.csv')
+        self.assertTrue(ok)
+
+
 if __name__ == '__main__':
     unittest.main()
