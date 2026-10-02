@@ -23,6 +23,7 @@ Use as a library (import ghq) or from the command line: python ghq.py --help
 """
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -44,7 +45,7 @@ LABELS = {
     'status:approved':   ('0e8a16', 'Approved: a Worker may run it'),
     'status:working':    ('5319e7', 'A Worker has claimed it and is running it'),
     'status:needs-jake': ('d93f0b', 'Stopped until Jake answers; Workers skip it'),
-    'status:snoozed':    ('8b572a', 'Parked on purpose; Workers skip it'),
+    'status:snoozed':    ('8b572a', 'Parked on purpose; Workers skip it (or waiting for a file, see snooze_until_file)'),
     'machine:any':       ('c5def5', 'Either PC may run it'),
     'machine:homebase':  ('0e8a16', 'Homebase only'),
     'machine:rig':       ('b60205', 'Rig only'),
@@ -73,10 +74,18 @@ PROGRESS_MARK = '<!-- jarvis:progress -->'
 CLAIM_RE = re.compile(r'^<!-- jarvis:claim (\S+) (\S+) -->')
 META_RE = re.compile(r'<!-- jarvis:meta (\{.*?\}) -->')
 RESET_MARK = '<!-- jarvis:reset -->'  # on approve / ask_jake comments: earlier claims and failed runs no longer count
+SNOOZE_RE = re.compile(r'<!-- jarvis:snooze (\{.*?\}) -->')
+OUTPUT_RE = re.compile(r'^\*\*Output file \(full path\):\*\* `[^`]*`\n?(Write the finished file to exactly this path.*)?$', re.M)
+# Where a bare file name ("plate5.3mf") is put when the card that makes it never named a folder.
+OUTPUT_ROOT = os.environ.get('JARVIS_OUTPUT_ROOT', r'C:\Jarvis\outputs-repo\cards')
 
 
 class GitHubError(Exception):
     pass
+
+
+class RateLimited(GitHubError):
+    """GitHub said slow down (secondary or primary rate limit). Nothing is sent until the cooldown ends."""
 
 
 # ---------------------------------------------------------------------------- HTTP
@@ -88,8 +97,84 @@ def _token():
     return t
 
 
+# A rate-limit cooldown is shared by every process on this PC through a small file, so a blocked Worker,
+# hub and watchdog all wait it out instead of each hammering GitHub (which extends the block).
+STATE_DIR = os.environ.get('JARVIS_STATE_DIR') or (
+    os.path.join(os.environ.get('ProgramData', r'C:\ProgramData'), 'Jarvis') if os.name == 'nt'
+    else os.path.join(os.path.expanduser('~'), '.jarvis'))
+COOLDOWN_FILE = os.path.join(STATE_DIR, 'github-cooldown.json')
+WRITE_GAP = 1.0  # GitHub asks for at least 1 s between content writes from one client
+_LAST_WRITE = [0.0]
+
+
+def _state_read(path, default):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _state_write(path, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f'{path}.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # best effort: the in-process cooldown still applies
+
+
+_COOLDOWN = [0.0, 0]  # until (epoch s), consecutive strikes
+
+
+def cooldown_left():
+    """Seconds until GitHub may be called again (0 when not cooling down)."""
+    disk = _state_read(COOLDOWN_FILE, {})
+    until = max(_COOLDOWN[0], float(disk.get('until') or 0))
+    return max(0.0, until - time.time())
+
+
+def _start_cooldown(headers, detail):
+    """Back off after a 403/429 rate-limit answer: Retry-After if given, the primary reset time if that is the
+    limit, else 60 s doubling per strike in a row (max 15 min)."""
+    disk = _state_read(COOLDOWN_FILE, {})
+    strikes = int(disk.get('strikes') or 0) + 1 if time.time() - float(disk.get('until') or 0) < 600 else 1
+    wait = 0
+    retry_after = headers.get('Retry-After') or headers.get('retry-after')
+    if retry_after and str(retry_after).isdigit():
+        wait = int(retry_after)
+    elif str(headers.get('X-RateLimit-Remaining') or headers.get('x-ratelimit-remaining')) == '0':
+        wait = int(headers.get('X-RateLimit-Reset') or headers.get('x-ratelimit-reset') or 0) - int(time.time())
+    wait = min(max(wait, 60 * 2 ** (strikes - 1)), 900)
+    until = time.time() + wait
+    _COOLDOWN[:] = [until, strikes]
+    _state_write(COOLDOWN_FILE, {'until': until, 'strikes': strikes, 'why': detail[:200],
+                                 'set': now_iso(), 'pid': os.getpid()})
+    return wait
+
+
+def _is_rate_limit(code, detail, headers):
+    if code == 429:
+        return True
+    if code != 403:
+        return False
+    return 'rate limit' in detail.lower() or str(headers.get('X-RateLimit-Remaining') or
+                                                 headers.get('x-ratelimit-remaining')) == '0'
+
+
 def request(method, path, body=None, etag=None, graphql=False):
-    """Call the GitHub REST API. Returns (status, data, headers). 304 returns (304, None, headers)."""
+    """Call the GitHub REST API. Returns (status, data, headers). 304 returns (304, None, headers).
+    Raises RateLimited, without calling GitHub, while a rate-limit cooldown is running."""
+    left = cooldown_left()
+    if left > 0:
+        raise RateLimited(f'GitHub rate limit: waiting {int(left)} s more before {method} {path}')
+    if method != 'GET':
+        gap = WRITE_GAP - (time.time() - _LAST_WRITE[0])
+        if gap > 0:
+            time.sleep(gap)
+        _LAST_WRITE[0] = time.time()
     url = path if path.startswith('http') else API + path
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -113,6 +198,9 @@ def request(method, path, body=None, etag=None, graphql=False):
                 time.sleep(2 * (attempt + 1))
                 continue
             detail = e.read().decode(errors='replace')[:500]
+            if _is_rate_limit(e.code, detail, dict(e.headers)):
+                wait = _start_cooldown(dict(e.headers), detail)
+                raise RateLimited(f'GitHub rate limit on {method} {path}: pausing GitHub calls for {wait} s') from None
             raise GitHubError(f'{method} {path} -> {e.code}: {detail}') from None
         except urllib.error.URLError as e:
             if attempt < 2:
@@ -125,15 +213,30 @@ def api(method, path, body=None):
     return request(method, path, body)[1]
 
 
+_PAGE_CACHE = {}  # url -> (etag, data): repeat list calls send If-None-Match; a 304 is free and returns this
+
+
 def paged(path):
-    """GET every page of a list endpoint."""
+    """GET every page of a list endpoint. Each page is re-fetched with If-None-Match, so an unchanged list
+    costs nothing against the rate limit (304s are free)."""
     # Numbered pages rather than the Link header: GitHub's "next" links use /repositories/<id>/ paths,
     # which some proxies refuse.
     path = re.sub(r'([?&])per_page=\d+&?', r'\1', path).rstrip('?&')
     sep = '&' if '?' in path else '?'
     out, page = [], 1
     while True:
-        data = request('GET', f'{path}{sep}per_page=100&page={page}')[1] or []
+        url = f'{path}{sep}per_page=100&page={page}'
+        etag, cached = _PAGE_CACHE.get(url, (None, None))
+        status, data, headers = request('GET', url, etag=etag)
+        if status == 304 and cached is not None:
+            data = cached
+        else:
+            data = data or []
+            tag = headers.get('ETag') or headers.get('etag')
+            if tag:
+                if len(_PAGE_CACHE) > 500:
+                    _PAGE_CACHE.clear()
+                _PAGE_CACHE[url] = (tag, data)
         out.extend(data)
         if len(data) < 100:
             return out
@@ -184,12 +287,82 @@ def set_status(number, status, extra_add=(), extra_remove=()):
     return issue
 
 
-def comment(number, text):
-    return api('POST', repo_path(f'/issues/{number}/comments'), {'body': text})
+OUTBOX_FILE = os.path.join(STATE_DIR, 'github-outbox.json')
+SENT_FILE = os.path.join(STATE_DIR, 'github-sent.json')
+REPEAT_WINDOW = 6 * 3600  # the same text on the same card within 6 h is a loop, not news
 
 
-def wake():
-    """Nudge each Worker over the tailnet. Best effort: polling still picks the card up if this fails."""
+def _comment_key(number, text):
+    # Timestamps and claim nonces differ between otherwise identical comments, so drop them from the key.
+    norm = re.sub(r'\d{4}-\d\d-\d\dT[\d:.+Z-]+|\b[0-9a-f]{10}\b', '', text)
+    norm = re.sub(r'\s+', ' ', norm).strip()
+    return f'{number}:' + hashlib.sha1(norm.encode()).hexdigest()[:12]
+
+
+def _remember(key):
+    sent = {k: v for k, v in _state_read(SENT_FILE, {}).items() if time.time() - v < REPEAT_WINDOW}
+    sent[key] = time.time()
+    _state_write(SENT_FILE, sent)
+
+
+def flush_outbox(limit=5):
+    """Post comments queued during a rate-limit cooldown, oldest first. Called before each new comment."""
+    box = _state_read(OUTBOX_FILE, [])
+    if not box or cooldown_left() > 0:
+        return 0
+    sent = 0
+    while box and sent < limit:
+        item = box[0]
+        try:
+            api('POST', repo_path(f'/issues/{item["number"]}/comments'), {'body': item['text']})
+            _remember(item['key'])
+        except RateLimited:
+            break
+        except GitHubError as e:
+            print(f'outbox: dropped comment for #{item["number"]}: {e}', file=sys.stderr)
+        box.pop(0)
+        sent += 1
+        _state_write(OUTBOX_FILE, box)
+    return sent
+
+
+def comment(number, text, queue=True, dedupe=True):
+    """Post a comment. Returns the new comment, or None when it was skipped as a repeat or queued.
+
+    dedupe: the same text on the same card again within 6 h is skipped (that is a bounce loop, and loops are
+    what tripped GitHub's content-creation limit on 10/02). queue: during a rate-limit cooldown the comment is
+    saved and posted once the cooldown ends, instead of raising. Claims and progress comments pass
+    queue=False, dedupe=False because the caller needs the comment id."""
+    key = _comment_key(number, text)
+    if dedupe:
+        sent = _state_read(SENT_FILE, {})
+        if time.time() - float(sent.get(key) or 0) < REPEAT_WINDOW:
+            return None
+    try:
+        flush_outbox()
+        out = api('POST', repo_path(f'/issues/{number}/comments'), {'body': text})
+    except RateLimited:
+        if not queue:
+            raise
+        box = _state_read(OUTBOX_FILE, [])
+        if not any(i.get('key') == key for i in box):
+            box.append({'number': number, 'text': text, 'key': key, 'queued': now_iso()})
+            _state_write(OUTBOX_FILE, box[-200:])
+        return None
+    if dedupe:
+        _remember(key)
+    return out
+
+
+_LAST_WAKE = [0.0]
+
+
+def wake(force=False):
+    """Nudge each Worker over the tailnet. Best effort: polling still picks the card up if this fails.
+    At most once a minute unless force (Jake's `now` cards always wake at once)."""
+    if not force and time.time() - _LAST_WAKE[0] < 60:
+        return
+    _LAST_WAKE[0] = time.time()
     for url in filter(None, (u.strip() for u in os.environ.get('JARVIS_WAKE_URLS', '').split(','))):
         try:
             urllib.request.urlopen(urllib.request.Request(url, data=b'{}', method='POST',
@@ -227,7 +400,10 @@ def ready(machine, use_etag_file=None):
     nothing against the API rate limit. Polling every 60 s is fine either way."""
     if not fleet_allows(machine):
         return []  # paused or disconnected from the phone app's Fleet panel (fleet/fleet.py)
-    path = repo_path('/issues?state=open&labels=status:approved&sort=created&direction=asc')
+    # Newest-updated first, so any change to the approved set (a new approval, a claim, an edit) changes page 1.
+    # Page 1 goes out with If-None-Match: an unchanged queue is a 304, which GitHub doesn't count against the
+    # rate limit, however many approved cards there are. Only a changed page 1 pays for the remaining pages.
+    path = repo_path('/issues?state=open&labels=status:approved&sort=updated&direction=desc')
     cache = {}
     if use_etag_file and os.path.exists(use_etag_file):
         try:
@@ -235,23 +411,19 @@ def ready(machine, use_etag_file=None):
                 cache = json.load(f)
         except ValueError:
             cache = {}
-    status, data, headers = request('GET', f'{path}&per_page=100&page=1', etag=cache.get('etag'))
-    if status == 304 and len(cache.get('data', [])) < 100:
-        # The ETag only covers page 1, so a 304 is trusted only when the whole queue fits on that page.
-        data = cache.get('data', [])
+    status, data, headers = request('GET', path + '&per_page=100&page=1', etag=cache.get('etag'))
+    if status == 304 and 'data' in cache:
+        data = cache['data']
     else:
-        etag = headers.get('ETag') or headers.get('etag')
-        if status == 304 or len(data or []) >= 100:
-            # More than one page: page 1's ETag can't vouch for the later pages, so read them all and don't
-            # cache an ETag (every poll re-reads until the queue is back under 100).
-            data = paged(path)
-            etag = None
+        data, page = list(data or []), 1
+        while len(data) == 100 * page:
+            page += 1
+            data += request('GET', path + f'&per_page=100&page={page}')[1] or []
+        data = [{'number': i['number'], 'title': i['title'], 'labels': label_names(i),
+                 'created_at': i['created_at'], 'pull_request': i.get('pull_request')} for i in data]
         if use_etag_file:
-            slim = [{'number': i['number'], 'title': i['title'], 'labels': label_names(i),
-                     'created_at': i['created_at'], 'pull_request': i.get('pull_request')} for i in data]
             with open(use_etag_file, 'w', encoding='utf-8') as f:
-                json.dump({'etag': etag, 'data': slim}, f)
-            data = slim
+                json.dump({'etag': headers.get('ETag') or headers.get('etag'), 'data': data}, f)
     out = []
     for i in data:
         names = label_names(i)
@@ -270,9 +442,20 @@ def ready(machine, use_etag_file=None):
 
 
 def now_waiting(machine, use_etag_file=None):
-    """The oldest `now` card this machine may run, or None. Cheap enough to call every 15 s while a card runs
-    (with an ETag file an unchanged queue is a free 304)."""
-    cards = [c for c in ready(machine, use_etag_file) if c['now']]
+    """The oldest `now` card this machine may run, or None. Reads only approved `now` cards (one small page,
+    re-fetched with If-None-Match), so it is cheap to call every 15-90 s while a card runs. use_etag_file is
+    accepted for older callers and ignored."""
+    if not fleet_allows(machine):
+        return None
+    cards = []
+    for i in paged(repo_path('/issues?state=open&labels=status:approved,now&sort=created&direction=asc')):
+        names = label_names(i)
+        if i.get('pull_request') or any(n.startswith('claimed:') for n in names):
+            continue
+        if not ({'machine:any', f'machine:{machine}'} & set(names)) and any(n.startswith('machine:') for n in names):
+            continue
+        cards.append({'number': i['number'], 'title': i['title'], 'labels': names, 'now': True,
+                      'priority': 0, 'created_at': i['created_at']})
     return cards[0] if cards else None
 
 
@@ -295,8 +478,13 @@ def claim(number, machine):
 
     Two Workers can race for a machine:any card, so the claim is a comment: both post one, then the earliest
     claim comment since the card's last run wins and the loser deletes its own. Only the winner moves labels."""
+    current = api('GET', repo_path(f'/issues/{number}'))
+    if current.get('state') != 'open' or status_of(current) != 'approved' or \
+            any(n.startswith('claimed:') for n in label_names(current)):
+        return False  # the cached queue was stale: someone else has it, or it was snoozed or closed
     nonce = uuid.uuid4().hex[:10]
-    mine = comment(number, f'<!-- jarvis:claim {machine} {nonce} -->\nClaimed by **{machine}** at {now_iso()}')
+    mine = comment(number, f'<!-- jarvis:claim {machine} {nonce} -->\nClaimed by **{machine}** at {now_iso()}',
+                   queue=False, dedupe=False)
     comments = paged(repo_path(f'/issues/{number}/comments'))
     since_last_run = []
     for c in comments:
@@ -321,7 +509,7 @@ def claim(number, machine):
     return True
 
 
-OUTCOMES = ('done', 'needs-jake', 'failed', 'timeout', 'waiting-usage', 'released', 'paused')
+OUTCOMES = ('done', 'needs-jake', 'failed', 'timeout', 'waiting-usage', 'released', 'paused', 'snoozed')
 
 
 def log_run(number, machine, outcome, started=None, ended=None, summary='', log_tail='', model=''):
@@ -332,6 +520,7 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
     waiting-usage  -> back to status:approved (the card is fine; the account hit its limit)
     released       -> back to status:approved (Worker let go without running, e.g. shutting down)
     paused         -> back to status:approved + `resume`, so it runs right after the `now` card that paused it
+    snoozed        -> status:snoozed (call snooze_until_file first so it knows which file wakes it)
     failed/timeout -> back to status:approved once; a second failed/timeout run in a row -> needs-jake
     """
     if outcome not in OUTCOMES:
@@ -355,7 +544,8 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
         tail = log_tail.strip()[-6000:]
         text += ['', '<details><summary>Log tail</summary>', '', '```', tail.replace('```', "'''"), '```',
                  '', '</details>']
-    comment(number, '\n'.join(text))
+    # Never deduped: each run record counts toward the two-failures rule, and two failed runs often read alike.
+    comment(number, '\n'.join(text), dedupe=False)
 
     remove = [f'claimed:{m}' for m in MACHINES]
     if outcome == 'done':
@@ -377,6 +567,9 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
     if outcome == 'paused':
         set_status(number, 'approved', extra_add=['resume'], extra_remove=remove)
         return 'approved'
+    if outcome == 'snoozed':
+        set_status(number, 'snoozed', extra_remove=remove)
+        return 'snoozed'
     set_status(number, 'approved', extra_remove=remove)
     return 'approved'
 
@@ -397,6 +590,7 @@ def new_card(title, body='', machine='any', priority=None, status='staged', card
              spawned_from=None, extra_labels=()):
     """Create a card. Workers should leave status as 'staged' so Jake approves it; only the hub and Jake
     create 'approved' cards (the guardrail rules decide which kinds skip approval)."""
+    global LAST_NEW_CARD_WAS_NEW
     if f'status:{status}' not in LABELS:
         raise ValueError(f'unknown status {status}')
     labels = [f'status:{status}', f'machine:{machine}', f'type:{card_type}'] + list(extra_labels)
@@ -405,18 +599,74 @@ def new_card(title, body='', machine='any', priority=None, status='staged', card
     if pin:
         labels.append('pin')
     if spawned_from:
+        if META_FOLLOWUP_RE.search(title):
+            return None  # "stop re-approving #N"-style cards: snooze/send_back handle loops now
+        if open_followups(spawned_from) >= MAX_FOLLOWUPS:
+            return None  # this card already has its share of open follow-ups; finish those first
+        dup = similar_open_child(spawned_from, title)
+        if dup:
+            LAST_NEW_CARD_WAS_NEW = False  # autotask.propose reads this so it doesn't comment on or count it
+            return dup
         body = (body + f'\n\nSpawned from #{spawned_from}').strip()
     issue = api('POST', repo_path('/issues'), {'title': title, 'body': body, 'labels': labels})
+    LAST_NEW_CARD_WAS_NEW = True
     return issue['number']
+
+
+LAST_NEW_CARD_WAS_NEW = True  # False when the last new_card returned an existing similar card instead
+
+# Follow-ups about the loop itself, which snooze_until / send_back now handle. Never filed as cards.
+META_FOLLOWUP_RE = re.compile(r're-?approv|stop (re-?)?running|pause (re-?)?approval|keeps? (looping|bouncing)', re.I)
+
+
+def _norm(t):
+    words = re.findall(r'[a-z0-9]+', t.lower())
+    stop = {'the', 'a', 'an', 'to', 'for', 'of', 'and', 'on', 'in', 'card', 'let', 'allow', 'make', 'add', 'when'}
+    return {w[:-1] if len(w) > 4 and w.endswith('s') else w for w in words} - stop
+
+
+MAX_FOLLOWUPS = int(os.environ.get('JARVIS_MAX_FOLLOWUPS_PER_CARD', '2'))  # open follow-ups one card may have
+
+
+def similar_open_child(parent, title, threshold=0.6, sibling_threshold=0.4):
+    """An open card with a similar title, or None. Siblings (spawned from the same parent) match more loosely,
+    because a Worker re-running a card rewords the same follow-up. Two search calls (search has its own quota)."""
+    want = _norm(title)
+    words = ' '.join(sorted(want, key=len, reverse=True)[:4])
+    for q, limit in ((f'repo:{REPO} is:issue is:open "Spawned from #{parent}" in:body', sibling_threshold),
+                     (f'repo:{REPO} is:issue is:open {words} in:title', threshold)):
+        try:
+            items = api('GET', '/search/issues?per_page=50&q=' + urllib.parse.quote(q)).get('items', [])
+        except GitHubError:
+            continue  # search down: file it rather than lose it
+        for i in items:
+            have = _norm(i['title'])
+            if want and have and len(want & have) / len(want | have) >= limit:
+                return i['number']
+    return None
+
+
+def open_followups(parent):
+    """How many open cards were spawned from `parent` (one search call)."""
+    q = f'repo:{REPO} is:issue is:open "Spawned from #{parent}" in:body'
+    try:
+        return api('GET', '/search/issues?per_page=1&q=' + urllib.parse.quote(q)).get('total_count', 0)
+    except GitHubError:
+        return 0
 
 
 def approve(number, by='hub'):
     """Approve a card. The phone hub checks the PIN itself before calling this for a card labelled 'pin'."""
+    current = api('GET', repo_path(f'/issues/{number}'))
+    if (current.get('state') == 'open' and status_of(current) == 'approved'
+            and not any(n.startswith('claimed:') for n in label_names(current))):
+        return  # a double tap or a retried request: already approved, so no second label write or comment
+    # A 'working' card is approved again on purpose: Jake re-approving a card whose Worker crashed mid-run.
     # Clears a claim left by a Worker that crashed, and reopens a closed card so ready() sees it again.
-    issue = set_status(number, 'approved', extra_remove=[f'claimed:{m}' for m in MACHINES])
-    if issue.get('state') == 'closed':
+    set_status(number, 'approved', extra_remove=[f'claimed:{m}' for m in MACHINES])
+    if current.get('state') == 'closed':
         api('PATCH', repo_path(f'/issues/{number}'), {'state': 'open'})
-    comment(number, f'Approved via {by} at {now_iso()}\n{RESET_MARK}')
+    comment(number, f'Approved via {by} at {now_iso()}\n{RESET_MARK}', dedupe=False)
     wake()
 
 
@@ -424,6 +674,386 @@ def ask_jake(number, question):
     # Question first, so anyone who sees the needs-jake label can already read it.
     comment(number, f'**Needs Jake:** {question}\n{RESET_MARK}')
     set_status(number, 'needs-jake', extra_remove=[f'claimed:{m}' for m in MACHINES])
+
+
+# ---------------------------------------------------------------------------- snooze until a file exists
+#
+# An approved card that can't start because an input file isn't there yet (another card makes it, or a print
+# hasn't finished) must not bounce back to Jake: Jake already approved it. The Worker snoozes it on the file
+# instead, and every poll `wake_snoozed()` puts it back to approved the moment the file shows up.
+
+def _is_full_path(path):
+    return bool(re.match(r'^[A-Za-z]:[\\/]', path) or path.startswith('\\\\') or path.startswith('/'))
+
+
+def parent_of(issue_or_number):
+    """The card this one was spawned from ("Spawned from #N" in the body), or None."""
+    issue = issue_or_number if isinstance(issue_or_number, dict) else api('GET', repo_path(f'/issues/{issue_or_number}'))
+    m = re.search(r'Spawned from #(\d+)', issue.get('body') or '')
+    return int(m.group(1)) if m else None
+
+
+def full_output_path(name, producer):
+    """A full path for a bare file name, in the producing card's own folder under OUTPUT_ROOT."""
+    name = re.split(r'[\\/]', name.strip().strip('"`'))[-1]
+    sep = '\\' if '\\' in OUTPUT_ROOT else '/'
+    return sep.join([OUTPUT_ROOT.rstrip('\\/'), f'card-{producer}', name])
+
+
+def set_output_path(producer, path, waiting=None):
+    """Edit the producing card's body so it writes its output to exactly `path` (replacing any earlier line)."""
+    issue = api('GET', repo_path(f'/issues/{producer}'))
+    body = OUTPUT_RE.sub('', issue.get('body') or '').rstrip()
+    line = f'**Output file (full path):** `{path}`'
+    note = f'\nWrite the finished file to exactly this path' + (f'; #{waiting} is snoozed until it exists.' if waiting else '.')
+    api('PATCH', repo_path(f'/issues/{producer}'), {'body': f'{body}\n\n{line}{note}'.strip()})
+    comment(producer, f'Output path set to `{path}`' + (f' so #{waiting} can start when it exists.' if waiting else '.'))
+    if issue.get('state') == 'closed':
+        # Already ran, but nobody knows where its file went. Reopen it (Jake approved it once already) to put
+        # the file at the full path: copy it there if it exists elsewhere, otherwise make it again.
+        api('PATCH', repo_path(f'/issues/{producer}'), {'state': 'open'})
+        set_status(producer, 'approved')
+        comment(producer, f'Reopened only to put its output at `{path}`. If the file already exists somewhere '
+                          'else, copy it there instead of redoing the work.')
+        wake()
+
+
+SNOOZE_KINDS = ('file', 'card', 'machine', 'time')
+MACHINE_FRESH_MIN = 10   # a PC counts as online if its health issue checked in this recently
+MAX_SNOOZES = 3          # a card snoozed this many times and still blocked goes to Jake with the history
+
+
+def _parse_iso(text):
+    t = dt.datetime.fromisoformat(str(text).strip().replace('Z', '+00:00'))
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+
+
+# Windows hostnames and tailnet names -> fleet names. The 5060 claims as "homebase" since 2026-10-02; the
+# junk laptop is the backup box (Home Assistant, relay).
+HOST_ALIASES = {'laptop-4150egrs': 'homebase', '5060': 'homebase', 'laptop': 'homebase',
+                'desktop-vllddm4': 'rig', 'desktop-5ve3c77': 'backup', 'junk': 'backup', 'jarvis-pi': 'pi'}
+SNOOZE_MACHINES = MACHINES + ['backup']
+# Health issue names each fleet name may still be reporting under (the 5060's watchdog wrote "laptop" until
+# its Health identity moved to "homebase"); the freshest check-in wins.
+HEALTH_NAMES = {'homebase': ['homebase', 'laptop']}
+
+
+def machine_name(name):
+    """A fleet name for a PC given as a fleet name, hostname or tailnet name (any case, with or without the
+    tailnet domain). Raises ValueError if it isn't a known PC."""
+    n = str(name).strip().lower().split('.')[0]
+    n = HOST_ALIASES.get(n, n)
+    if n not in SNOOZE_MACHINES:
+        raise ValueError(f'unknown machine {name}')
+    return n
+
+
+def snooze_until(number, kind, value, machine, reason='', producer=None):
+    """Park a card (status:snoozed) until a condition is met; never asks Jake. Returns the value watched.
+
+      file     value is a full path (or a bare name, see snooze_until_file) that must exist on `machine`
+      card     value is a card number that must be closed (done)
+      machine  value is a PC name ('rig', 'homebase', ...) whose health issue must have checked in recently
+      time     value is an ISO time (UTC if no zone) that must have passed
+
+    `machine` is the PC whose Worker checks the condition (for a file, the PC the file lands on)."""
+    if kind not in SNOOZE_KINDS:
+        raise ValueError(f'snooze kind must be one of {SNOOZE_KINDS}')
+    if kind == 'file':
+        value = str(value).strip().strip('"`')
+        if not _is_full_path(value):
+            producer = producer or parent_of(number)
+            if not producer:
+                raise ValueError(f'#{number}: "{value}" is not a full path and the card has no parent to edit; '
+                                 'pass a full path or producer=<card that makes the file>')
+            value = full_output_path(value, producer)
+            set_output_path(producer, value, waiting=number)
+        elif os.path.exists(value):
+            raise ValueError(f'`{value}` already exists, so there is nothing to wait for')
+        what = f'this file exists on {machine}: `{value}`'
+    elif kind == 'card':
+        value = int(str(value).lstrip('#'))
+        if value == number:
+            raise ValueError('a card cannot wait on itself')
+        if api('GET', repo_path(f'/issues/{value}')).get('state') == 'closed':
+            raise ValueError(f'#{value} is already done, so there is nothing to wait for')
+        what = f'#{value} is done'
+        producer = producer or value
+    elif kind == 'machine':
+        value = machine_name(value)
+        if value == machine:
+            raise ValueError(f'#{number} is already on {value}; waiting for {value} to be online would wake at once')
+        if value in MACHINES:
+            # "Run this on the rig" means the card belongs to that PC: move it there, or the snoozing Worker
+            # (machine:any) claims it again the moment it wakes. If that PC is already up, nothing to wait for.
+            issue = api('GET', repo_path(f'/issues/{number}'))
+            keep = [n for n in label_names(issue) if not n.startswith(('machine:', 'claimed:'))]
+            if machine_online(value):
+                keep = [n for n in keep if not n.startswith('status:')] + ['status:approved', f'machine:{value}']
+                api('PUT', repo_path(f'/issues/{number}/labels'), {'labels': keep})
+                comment(number, f'Moved to **{value}**, which is online now.' + (f'\n\n{reason.strip()}' if reason else ''))
+                wake()
+                return value
+            api('PUT', repo_path(f'/issues/{number}/labels'), {'labels': keep + [f'machine:{value}']})
+        what = f'**{value}** is online'
+    else:
+        when = _parse_iso(value).replace(microsecond=0)
+        if when <= dt.datetime.now(dt.timezone.utc):
+            raise ValueError(f'{when.isoformat()} has already passed')
+        value = when.isoformat()
+        what = f'{value}'
+    meta = {'kind': kind, 'value': value, 'machine': machine, 'since': now_iso(), 'producer': producer}
+    if kind == 'file':
+        meta['path'] = value
+    set_status(number, 'snoozed', extra_remove=[f'claimed:{m}' for m in MACHINES] + ['resume'])
+    comment(number, f'<!-- jarvis:snooze {json.dumps(meta)} -->\n**Snoozed until {what}**' +
+                    (f'\n\n{reason.strip()}' if reason else '') +
+                    (f'\n\nMade by #{producer}.' if producer and kind == 'file' else '') +
+                    '\n\nIt goes back to approved by itself when that happens. No action needed from Jake.', dedupe=False)
+    return value
+
+
+def snooze_until_file(number, path, machine, reason='', producer=None):
+    """Park a card until `path` exists on `machine`; never asks Jake.
+
+    If `path` is only a file name, the producing card (`producer`, else this card's parent) is edited to write
+    to a full path, and the snooze watches that path. Returns the full path watched."""
+    return snooze_until(number, 'file', path, machine, reason, producer)
+
+
+def snooze_of(number):
+    """The latest snooze record on a card ({kind, value, machine, since, producer}) or None."""
+    found = None
+    for c in paged(repo_path(f'/issues/{number}/comments')):
+        m = SNOOZE_RE.search(c.get('body') or '')
+        if m:
+            found = json.loads(m.group(1))
+    if found and 'kind' not in found:  # written before kinds existed
+        found.update(kind='file', value=found.get('path'))
+    return found
+
+
+_SNOOZE_CACHE = {}  # issue number -> (updated_at, snooze record): comments are only re-read when a card changes
+
+
+def snoozed(machine=None):
+    """Open snoozed cards with what each waits on (kind None = snoozed by hand). Used by the hub too.
+    One list call per 100 snoozed cards; a card's comments are read only when it changed since last time."""
+    out = []
+    for i in paged(repo_path('/issues?state=open&labels=status:snoozed')):
+        if i.get('pull_request'):
+            continue
+        hit = _SNOOZE_CACHE.get(i['number'])
+        if hit and hit[0] == i['updated_at']:
+            s = hit[1]
+        else:
+            s = snooze_of(i['number']) or {}
+            _SNOOZE_CACHE[i['number']] = (i['updated_at'], s)
+        if machine and s.get('machine') not in (None, machine):
+            continue
+        out.append({'number': i['number'], 'title': i['title'], 'kind': s.get('kind'), 'value': s.get('value'),
+                    'path': s.get('path'), 'machine': s.get('machine'), 'since': s.get('since'),
+                    'producer': s.get('producer')})
+    return out
+
+
+def machine_online(name, fresh_min=MACHINE_FRESH_MIN):
+    """True if any Health issue this PC reports under checked in within `fresh_min` minutes."""
+    for health_name in HEALTH_NAMES.get(name, [name]):
+        number = health_issue(health_name)
+        if not number:
+            continue
+        m = re.search(r'\*\*Last check-in:\*\* (\S+)', api('GET', repo_path(f'/issues/{number}')).get('body') or '')
+        if m and (dt.datetime.now(dt.timezone.utc) - _parse_iso(m.group(1))).total_seconds() < fresh_min * 60:
+            return True
+    return False
+
+
+def condition_met(s, exists=os.path.exists, closed=None):
+    """`closed`: optional set of recently closed card numbers, so a sweep checks every card condition with one call."""
+    kind, value = s.get('kind'), s.get('value')
+    if kind == 'file':
+        return bool(value) and exists(value)
+    if kind == 'card':
+        if closed is not None:
+            return int(value) in closed
+        return api('GET', repo_path(f'/issues/{value}')).get('state') == 'closed'
+    if kind == 'machine':
+        return machine_online(value)
+    if kind == 'time':
+        return dt.datetime.now(dt.timezone.utc) >= _parse_iso(value)
+    return False  # snoozed by hand, or waiting on Jake or a Claude thread
+
+
+def wake_snoozed(machine, exists=os.path.exists):
+    """Call once per poll (every few minutes is plenty). Any card this machine watches whose condition is now met
+    goes back to approved. Cards snoozed by hand, or on Jake or a Claude thread, are left alone. Returns the
+    numbers woken. Costs one list call plus, when a card waits on another card, one closed-cards call."""
+    mine = [s for s in snoozed(machine) if s['kind'] and s['machine'] == machine]
+    closed = None
+    if any(s['kind'] == 'card' for s in mine):
+        since = min(s['since'] or now_iso() for s in mine if s['kind'] == 'card')
+        since = (_parse_iso(since) - dt.timedelta(days=7)).isoformat()  # also catch cards closed just before
+        closed = {i['number'] for i in paged(repo_path('/issues?state=closed&since=' + urllib.parse.quote(since)))}
+    woken = []
+    for s in mine:
+        if condition_met(s, exists, closed):
+            set_status(s['number'], 'approved')
+            comment(s['number'], f'Snooze condition met ({s["kind"]}: `{s["value"]}`): back to approved at {now_iso()}.')
+            woken.append(s['number'])
+    if woken:
+        wake()
+    return woken
+
+
+SNOOZE_LINE_RE = re.compile(r'^\s*SNOOZE_UNTIL:\s*(.+?)\s*$', re.M)
+
+
+def parse_snooze_line(text):
+    """The Worker's `SNOOZE_UNTIL: <what> | <reason> [| producer=#N]` line (the last one in `text`), as
+    {kind, value, reason, producer}, or None. <what> is card:<n>, machine:<name>, time:<ISO>, file:<path>, or a
+    bare path or file name (a Windows drive letter like C: is a path, not a kind)."""
+    found = SNOOZE_LINE_RE.findall(text or '')
+    if not found:
+        return None
+    parts = [x.strip() for x in found[-1].split('|')]
+    what, reason, producer = parts[0].strip('"`'), '', None
+    for x in parts[1:]:
+        m = re.match(r'producer\s*=\s*#?(\d+)$', x)
+        if m:
+            producer = int(m.group(1))
+        else:
+            reason = (reason + ' ' + x).strip()
+    kind, value = 'file', what
+    m = re.match(r'^(\w{2,}):(.+)$', what)
+    if m and m.group(1).lower() in SNOOZE_KINDS:
+        kind, value = m.group(1).lower(), m.group(2).strip().strip('"`')
+    return {'kind': kind, 'value': value, 'reason': reason, 'producer': producer}
+
+
+# ---------------------------------------------------------------------------- approval-loop triage
+#
+# Jake approves a card, the Worker kicks it back as "needs Jake", he approves again, it bounces again. Before
+# any card goes back to Jake, the Worker asks a model (the local one first, Claude if that fails) what the card
+# is really waiting on. Only a blocker that truly is Jake (a decision, a PIN, a purchase, a login, something
+# physical) goes to him; anything else is snoozed on that condition.
+
+TRIAGE_KINDS = ('jake',) + SNOOZE_KINDS
+TRIAGE_PROMPT = """You are triaging a Jarvis task card that a Worker wants to send back to Jake for approval.
+Jake already approved it{loop}. Work out what the card is actually waiting on.
+
+Answer "jake" ONLY if nothing but Jake can unblock it: a decision or preference only he can make, a PIN,
+spending money, posting or sending something outside, deleting something, a password or login, or a
+physical action (plug in, load filament, press a button). Otherwise pick what it waits on:
+  file     a file that another card, a print, a sync or a download will produce (value: full path, or file name)
+  card     another card that has to finish first (value: its number)
+  machine  a PC that has to be online: {machines} (value: its name)
+  time     a time it can't start before, e.g. a usage reset (value: ISO time, UTC)
+
+Card #{number}: {title}
+{body}
+
+Why the Worker stopped it this time:
+{reason}
+
+History (oldest first):
+{history}
+
+Reply with one JSON object and nothing else:
+{{"kind": "jake|file|card|machine|time", "value": "...", "machine": "PC that will see the file (file only)", "why": "one sentence: what it waits on and why it kept looping"}}"""
+
+
+def bounce_history(number):
+    """Every time the card went to Jake, was approved, or was snoozed, oldest first."""
+    out = []
+    for c in paged(repo_path(f'/issues/{number}/comments')):
+        b = c.get('body') or ''
+        when = c.get('created_at', '')
+        if b.startswith('**Needs Jake:**'):
+            out.append({'at': when, 'event': 'needs-jake', 'text': b[len('**Needs Jake:**'):].strip()[:400]})
+        elif b.startswith('Approved via'):
+            out.append({'at': when, 'event': 'approved', 'text': b[:80]})
+        elif SNOOZE_RE.search(b):
+            out.append({'at': when, 'event': 'snoozed', 'text': re.sub(r'<!--.*?-->\n?', '', b).strip()[:300]})
+        elif b.startswith(RUN_MARK) and '"outcome": "needs-jake"' in b:
+            out.append({'at': when, 'event': 'run needs-jake',
+                        'text': re.sub(r'<!--.*?-->\n?', '', b).split('<details>')[0].strip()[:400]})
+    return out
+
+
+def triage_prompt(number, reason):
+    issue = api('GET', repo_path(f'/issues/{number}'))
+    hist = bounce_history(number)
+    bounces = sum(1 for h in hist if h['event'] in ('needs-jake', 'run needs-jake'))
+    loop = f', and it has already been sent back to him {bounces} time(s)' if bounces else ''
+    lines = '\n'.join(f"- {h['at']} {h['event']}: {h['text']}" for h in hist[-12:]) or '- (none)'
+    return TRIAGE_PROMPT.format(loop=loop, machines='homebase (the 5060), rig, pi, backup (the junk laptop)', number=number, title=issue['title'],
+                                body=(issue.get('body') or '').strip()[:3000], reason=reason.strip()[:1500],
+                                history=lines)
+
+
+def parse_triage(text):
+    """The model's JSON verdict, checked. Raises ValueError if it is unusable."""
+    m = re.search(r'\{.*\}', text or '', re.S)
+    if not m:
+        raise ValueError('no JSON in triage answer')
+    v = json.loads(m.group(0))
+    if v.get('kind') not in TRIAGE_KINDS:
+        raise ValueError(f'bad kind {v.get("kind")!r}')
+    if v['kind'] != 'jake' and not str(v.get('value') or '').strip():
+        raise ValueError('missing value')
+    return v
+
+
+def ask_ollama(prompt, model=None, url=None, timeout=180):
+    model = model or os.environ.get('JARVIS_TRIAGE_MODEL', 'baby-jarvis')
+    url = url or os.environ.get('OLLAMA_URL', 'http://127.0.0.1:11434') + '/api/generate'
+    body = json.dumps({'model': model, 'prompt': prompt, 'stream': False, 'format': 'json', 'think': False,
+                       'options': {'temperature': 0}}).encode()
+    req = urllib.request.Request(url, data=body, method='POST', headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())['response']
+
+
+def ask_claude(prompt, timeout=300):
+    import subprocess
+    exe = os.environ.get('CLAUDE_EXE', 'claude')
+    r = subprocess.run([exe, '-p', '--output-format', 'text'], input=prompt, capture_output=True, text=True,
+                       timeout=timeout, encoding='utf-8', errors='replace')
+    return r.stdout
+
+
+def send_back(number, machine, reason, models=None):
+    """Use instead of ask_jake whenever a Worker would send a card back to Jake.
+
+    Asks the models in turn (default: local Ollama, then Claude) what the card waits on. Snoozes it on that, or
+    asks Jake only when the blocker really is him, or when the card has already been snoozed MAX_SNOOZES times
+    and is still stuck, or no model gave a usable answer. Returns ('snoozed', kind, value) or ('needs-jake',)."""
+    models = models if models is not None else [ask_ollama, ask_claude]
+    hist = bounce_history(number)
+    if sum(1 for h in hist if h['event'] == 'snoozed') >= MAX_SNOOZES:
+        ask_jake(number, f'{reason}\n\nThis card has been snoozed {MAX_SNOOZES} times and is still stuck, so it '
+                         'needs a look. Snooze history is above.')
+        return ('needs-jake',)
+    prompt, verdict, errors = triage_prompt(number, reason), None, []
+    for ask in models:
+        try:
+            verdict = parse_triage(ask(prompt))
+            break
+        except Exception as e:  # noqa: BLE001 - a down model falls through to the next one
+            errors.append(f'{getattr(ask, "__name__", "model")}: {e}')
+    if verdict and verdict['kind'] != 'jake':
+        try:
+            value = snooze_until(number, verdict['kind'], verdict['value'],
+                                 verdict.get('machine') if verdict['kind'] == 'file' and verdict.get('machine') in MACHINES
+                                 else machine, f'{verdict.get("why", "")}\n\nWorker said: {reason}'.strip())
+            return ('snoozed', verdict['kind'], value)
+        except (ValueError, GitHubError) as e:
+            errors.append(f'snooze: {e}')
+    why = (verdict or {}).get('why')
+    ask_jake(number, reason + (f'\n\nTriage: {why}' if why else '') +
+             (f'\n\n<!-- triage errors: {"; ".join(errors)[:500]} -->' if errors else ''))
+    return ('needs-jake',)
 
 
 # ---------------------------------------------------------------------------- the "now" lane
@@ -439,7 +1069,7 @@ def progress(number, machine, text, comment_id=None):
             return comment_id
         except GitHubError:
             pass  # deleted by hand: start a new one
-    return comment(number, body)['id']
+    return comment(number, body, queue=False, dedupe=False)['id']
 
 
 def jake_now(title, body='', machine='homebase'):
@@ -448,7 +1078,7 @@ def jake_now(title, body='', machine='homebase'):
     number = new_card(title, body or title, machine=machine, priority='p0', status='approved',
                       extra_labels=['now'])
     comment(number, f'Typed by Jake for right now at {now_iso()}')
-    wake()
+    wake(force=True)
     return number
 
 
@@ -584,6 +1214,21 @@ def main(argv=None):
     s.add_argument('--watch', action='store_true', help='print progress until it finishes')
     s = sub.add_parser('watch', help="print a card's progress until it finishes")
     s.add_argument('number', type=int)
+    s = sub.add_parser('snooze', help='park a card until a file exists (never asks Jake)')
+    s.add_argument('number', type=int)
+    s.add_argument('path', nargs='?', help='file to wait for: full path, or a bare name to route through the parent card')
+    s.add_argument('--until', help='other conditions: card:<n>, machine:<name>, time:<ISO>')
+    s.add_argument('--machine', required=True, help='the PC whose Worker checks it (for a file, where it appears)')
+    s.add_argument('--reason', default='')
+    s.add_argument('--producer', type=int, help='card that makes the file (default: the parent card)')
+    s = sub.add_parser('snoozed', help='list snoozed cards and the file each waits on')
+    s.add_argument('--machine')
+    s = sub.add_parser('send-back', help='triage a card a Worker would send to Jake: snooze it, or ask Jake')
+    s.add_argument('number', type=int)
+    s.add_argument('reason')
+    s.add_argument('--machine', required=True)
+    s = sub.add_parser('wake-snoozed', help='approve snoozed cards whose file now exists here')
+    s.add_argument('--machine', required=True)
     s = sub.add_parser('progress', help="rewrite a card's progress comment")
     s.add_argument('number', type=int)
     s.add_argument('--machine', required=True)
@@ -620,7 +1265,7 @@ def main(argv=None):
             for t in usage(a.days):
                 print(f"#{t['number']:<5} {t['minutes']:7.1f} min  {t['runs']} runs  {t['outcomes']}")
         elif a.cmd == 'wake':
-            wake()
+            wake(force=True)
         elif a.cmd == 'now':
             n = jake_now(a.title, a.body, a.machine)
             print(f'#{n} https://github.com/{REPO}/issues/{n}')
@@ -628,6 +1273,20 @@ def main(argv=None):
                 print(f'Finished: {watch(n)}')
         elif a.cmd == 'watch':
             print(f'Finished: {watch(a.number)}')
+        elif a.cmd == 'snooze':
+            if a.until:
+                kind, _, value = a.until.partition(':')
+                print(snooze_until(a.number, kind, value, a.machine, a.reason, a.producer))
+            elif a.path:
+                print(snooze_until_file(a.number, a.path, a.machine, a.reason, a.producer))
+            else:
+                p.error('snooze needs a path or --until')
+        elif a.cmd == 'send-back':
+            print(json.dumps(send_back(a.number, a.machine, a.reason)))
+        elif a.cmd == 'snoozed':
+            print(json.dumps(snoozed(a.machine), indent=1))
+        elif a.cmd == 'wake-snoozed':
+            print(json.dumps(wake_snoozed(a.machine)))
         elif a.cmd == 'progress':
             print(progress(a.number, a.machine, a.text, a.comment_id))
     except GitHubError as e:

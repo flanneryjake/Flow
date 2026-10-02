@@ -57,13 +57,16 @@ class FakeGitHub:
             self.issues[n] = {'number': n, 'node_id': f'N{n}', 'title': body['title'], 'body': body.get('body', ''),
                               'labels': list(dict.fromkeys(body.get('labels', []))), 'state': 'open',
                               'created_at': self._ts()}
+            self.issues[n]['updated_at'] = self.issues[n]['created_at']
             self.comments[n] = []
             return 201, self._out(self.issues[n]), {}
         if p == R + '/issues':
             items = [i for i in self.issues.values() if q.get('state', 'open') in ('all', i['state'])]
             if 'labels' in q:
                 items = [i for i in items if all(l in i['labels'] for l in q['labels'].split(','))]
-            out = [self._out(i) for i in self._page(sorted(items, key=lambda i: i['created_at']), q)]
+            key = 'updated_at' if q.get('sort') == 'updated' else 'created_at'
+            items = sorted(items, key=lambda i: i[key], reverse=q.get('direction') == 'desc')
+            out = [self._out(i) for i in self._page(items, q)]
             tag = 'W/"' + hashlib.md5(json.dumps(out, sort_keys=True).encode()).hexdigest() + '"'
             return (304, None, {'ETag': tag}) if etag == tag else (200, out, {'ETag': tag})
         m = re.fullmatch(R + r'/issues/(\d+)', p)
@@ -72,10 +75,12 @@ class FakeGitHub:
             if method == 'PATCH':
                 for k, v in body.items():
                     i[k] = list(dict.fromkeys(v)) if k == 'labels' else v
+                i['updated_at'] = self._ts()
             return 200, self._out(i), {}
         m = re.fullmatch(R + r'/issues/(\d+)/labels', p)
         if m:
             self.issues[int(m.group(1))]['labels'] = list(dict.fromkeys(body['labels']))
+            self.issues[int(m.group(1))]['updated_at'] = self._ts()
             return 200, [], {}
         m = re.fullmatch(R + r'/issues/(\d+)/comments', p)
         if m:
@@ -84,6 +89,7 @@ class FakeGitHub:
                 c = {'id': next(self.cid), 'body': body['body'], 'created_at': self._ts(),
                      'issue_url': f'https://api.github.com{R}/issues/{n}'}
                 self.comments[n].append(c)
+                self.issues[n]['updated_at'] = c['created_at']
                 return 201, dict(c), {}
             return 200, [dict(c) for c in self._page(self.comments[n], q)], {}
         m = re.fullmatch(R + r'/issues/comments/(\d+)', p)
@@ -101,6 +107,12 @@ class FakeGitHub:
         if p == R + '/issues/comments':
             everything = sorted((c for cs in self.comments.values() for c in cs), key=lambda c: c['id'])
             return 200, self._page(everything, q), {}
+        if p == '/search/issues':
+            # Only the quoted-phrase searches ghq makes ("Spawned from #N" in:body, title words in:title).
+            phrase = re.search(r'"([^"]+)"', q.get('q', ''))
+            items = [self._out(i) for i in self.issues.values() if i['state'] == 'open'
+                     and phrase and phrase.group(1) in (i.get('body') or '')]
+            return 200, {'total_count': len(items), 'items': self._page(items, q)}, {}
         raise AssertionError(f'fake GitHub has no {method} {path}')
 
 
@@ -109,9 +121,19 @@ class GhqTest(unittest.TestCase):
         self.gh = FakeGitHub()
         self._request = ghq.request
         ghq.request = self.gh
+        # Each test gets its own state files and empty caches, so the comment dedupe and the ETag caches of
+        # one test never leak into the next.
+        self._state = tempfile.TemporaryDirectory()
+        for name in ('COOLDOWN_FILE', 'OUTBOX_FILE', 'SENT_FILE'):
+            setattr(ghq, name, os.path.join(self._state.name, os.path.basename(getattr(ghq, name))))
+        for cache in (ghq._PAGE_CACHE, ghq._ETAG_CACHE, ghq._SNOOZE_CACHE):
+            cache.clear()
+        ghq._LAST_WAKE[0] = ghq._LAST_WRITE[0] = 0.0
+        ghq._COOLDOWN[:] = [0.0, 0]
 
     def tearDown(self):
         ghq.request = self._request
+        self._state.cleanup()
 
     def labels(self, n):
         return self.gh.issues[n]['labels']
