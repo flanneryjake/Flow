@@ -93,6 +93,9 @@ def main():
     except RuntimeError as e:
         print(f"Gemini failed: {e}", file=sys.stderr)
         return 3
+    # Windows pipes default to cp1252, which can't hold every character Gemini returns (arrows, emoji).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     footer = f"\n\n_{a.mode} by {model}{' with Google Search' if searched else ''}_\n"
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:

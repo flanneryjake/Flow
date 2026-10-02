@@ -28,12 +28,13 @@ $results = [ordered]@{}
 
 # --- Which machine is this? -----------------------------------------------------------
 switch ($env:COMPUTERNAME.ToUpper()) {
-    'DESKTOP-5VE3C77' { $machine = 'homebase' }
+    # Since 10/02 the 5060 is homebase and the old junk laptop is the backup (Home Assistant, wake relay).
+    'LAPTOP-4150EGRS' { $machine = 'homebase' }
     'DESKTOP-VLLDDM4' { $machine = 'rig' }
-    'LAPTOP-4150EGRS' { $machine = 'laptop' }
+    'DESKTOP-5VE3C77' { $machine = 'backup' }
     default {
-        $machine = (Read-Host "Is this 'homebase', 'rig' or 'laptop'? (computer name $env:COMPUTERNAME)").Trim().ToLower()
-        if ($machine -notin 'homebase', 'rig', 'laptop') { throw "Unknown machine '$machine'." }
+        $machine = (Read-Host "Is this 'homebase', 'rig' or 'backup'? (computer name $env:COMPUTERNAME)").Trim().ToLower()
+        if ($machine -notin 'homebase', 'rig', 'backup') { throw "Unknown machine '$machine'." }
     }
 }
 $workDir = if ($machine -eq 'homebase') { 'C:\Jarvis' } else { "$env:USERPROFILE\Desktop\Claude" }
