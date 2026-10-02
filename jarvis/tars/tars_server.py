@@ -30,6 +30,7 @@ import urllib.parse
 import urllib.request
 import winreg
 
+import live
 import lookup
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -46,6 +47,8 @@ WINDOW = 20                 # turns fed verbatim
 SUMMARIZE_EVERY = 10        # fold older turns into the summary once this many have dropped out of the window
 HEARTBEAT = r'C:\Jarvis\worker.heartbeat'
 JOBS_LOG = os.path.join(os.path.expanduser('~'), 'JarvisAgent', 'logs', 'laptop-jobs.jsonl')
+# Turns and memory from before the Iron Man persona went live carry the old Boston voice; the model never sees them.
+PERSONA_SINCE = os.environ.get('JARVIS_PERSONA_SINCE', '2026-10-02T17:20:00')
 
 model_lock = threading.Lock()
 file_lock = threading.Lock()
@@ -102,6 +105,9 @@ def maybe_summarize():
     """Fold turns that fell out of the 20-turn window into summary.json (background thread)."""
     turns = load_turns()
     s = read_json(SUMMARY, {'summary': '', 'upto': 0})
+    if s.get('at', '') < PERSONA_SINCE:    # never fold the old Boston memory into the new one
+        s = {'summary': '', 'upto': next((i for i, t in enumerate(turns) if t.get('at', '') >= PERSONA_SINCE),
+                                         len(turns))}
     cut = len(turns) - WINDOW
     if cut - s['upto'] < SUMMARIZE_EVERY:
         return
@@ -302,11 +308,13 @@ def window_hours(text):
     return 12
 
 
+# Only questions about the board or the machines get FACTS; "sunset tonight" or "how's it going" must not drag the
+# queue into small talk.
 TASK_WORDS = re.compile(
-    r"\b(task|tasks|card|cards|queue|working on|work on|status|doing|did we|did you|have you|done|finish|finished|"
-    r"progress|update|busy|pending|waiting|approved|inbox|rig|homebase|laptop|pi|health|offline|online|history|"
-    r"remember|last \d+|today|tonight|yesterday|overnight|what's new|whats new|anything new|happened|issue|#\d+|"
-    r"worker|jobs?|projects?)\b", re.I)
+    r"\b(tasks?|cards?|queue|working on|status of|what (?:are|were|did|have) (?:you|we|they)(?: been)? "
+    r"(?:doing|do|done|working)|did (?:you|we) (?:do|get|finish)|progress on|pending|approved|inbox|rig|homebase|"
+    r"laptop|tars|hal|pi|health|offline|online|overnight|what's new|whats new|anything new|issue|#\d+|worker|"
+    r"jobs?|projects?)\b", re.I)
 
 
 FILE_RE = re.compile(
@@ -370,11 +378,17 @@ def chat(text):
                     'or tell Claude directly.')
 
     fx = facts(text) if (TASK_WORDS.search(text) and not fm) else ''
-    turns = load_turns()[:-1][-WINDOW:]
-    summary = read_json(SUMMARY, {}).get('summary', '')
-    ctx = [f'Now: {dt.datetime.now():%A %m/%d %H:%M}. Humor setting: {humor()}%.']
+    turns = [t for t in load_turns()[:-1] if t.get('at', '') >= PERSONA_SINCE][-WINDOW:]
+    mem = read_json(SUMMARY, {})
+    summary = mem.get('summary', '') if mem.get('at', '') >= PERSONA_SINCE else ''
+    now = dt.datetime.now()
+    ctx = [f'Now: {now:%A, %B} {now.day}, {now.year}, {now:%I:%M %p}'.replace(' 0', ' ') +
+           f' (yesterday was {now - dt.timedelta(days=1):%A %B %d}). Humor setting: {humor()}%.']
     if summary:
         ctx.append('Memory of earlier conversations: ' + summary)
+    lv = '' if fm else live.facts(text, log=log)
+    if lv:
+        ctx.append('LIVE (fresh data; answer from it, do not LOOKUP these):\n' + lv)
     if fx:
         ctx.append('FACTS (live from the task board and this laptop; answer from these, cite card numbers, '
                    'never invent others. "We" and "you" mean the whole Jarvis setup, so say which machine or Claude did what; '
@@ -390,7 +404,7 @@ def chat(text):
                 more = msgs[:-1] + [{'role': 'user', 'content': msgs[-1]['content'].replace(
                     '[/context]', 'NOTE: ' + found + '\n[/context]')}]
                 return ollama_chat(more, num_predict=260)
-            reply = lookup.resolve(text, reply, answer_with, log=log)
+            reply = lookup.resolve(text, reply, answer_with, log=log, today=f'{now:%A %B %d %Y}')
         else:
             reply = lookup.scrub(reply)
     except Exception as e:  # noqa: BLE001

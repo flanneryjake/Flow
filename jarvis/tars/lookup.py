@@ -11,6 +11,7 @@ up ("I don't know", "I can't browse", ...), resolve() fetches the facts and the 
 Privacy: clinical / patient / work (Recovery Solutions, Fieldwork Clinical) and money-account questions never go to
 Gemini or the web; they go to Claude or stay local. Standard library only.
 """
+import html
 import json
 import os
 import re
@@ -39,6 +40,10 @@ PRIVATE_RE = re.compile(
     r"medicat\w*|prescri\w*|therapy|counsel\w*|hipaa|phi|recovery\s+solutions|fieldwork|intake|treatment\s+plan|"
     r"bank\s+account|account\s+number|routing|password|ssn|social\s+security)\b", re.I)
 BANNED_RE = re.compile(r"(?:,\s*)?\b(kid|kiddo|wicked|southie|pal|buddy)\b", re.I)
+OLD_HOME_RE = re.compile(r"[^.!?]*\b(south\s+end|southie|the\s+bean)\b[^.!?]*[.!?]?\s*", re.I)
+SENTENCE_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"])')
+STOP = set('the a an is are was were what when where who how why do does did to of in on for at it its and or me my '
+           'i you your tonight today tomorrow please jarvis hey can could tell'.split())
 
 
 def is_private(text):
@@ -46,10 +51,17 @@ def is_private(text):
 
 
 def scrub(reply):
-    """Last line of defence for the old Boston voice: drop "kid"/"wicked" and friends."""
-    out = BANNED_RE.sub('', reply or '')
+    """Last line of defence for the old Boston voice: drop "kid"/"wicked" and friends, and South End asides."""
+    out = OLD_HOME_RE.sub('', reply or '')
+    out = BANNED_RE.sub('', out)
     out = re.sub(r'\s+([,.!?])', r'\1', out)
     return re.sub(r'\s{2,}', ' ', out).strip()
+
+
+def trim(reply, sentences=3):
+    """Spoken replies stay short: at most `sentences` sentences."""
+    parts = SENTENCE_RE.split((reply or '').strip())
+    return ' '.join(parts[:sentences]).strip()
 
 
 def wants(reply, question):
@@ -88,9 +100,43 @@ def searx(query, n=5, timeout=12):
         lines.append(f'Answer box: {a if isinstance(a, str) else a.get("answer", "")}'[:400])
     for b in (data.get('infoboxes') or [])[:1]:
         lines.append(f'Infobox {b.get("infobox", "")}: {b.get("content", "")}'[:500])
-    for res in (data.get('results') or [])[:n]:
+    results = (data.get('results') or [])[:n]
+    for res in results:
         lines.append(f'- {res.get("title", "")}: {res.get("content", "")} ({res.get("url", "")})'[:400])
+    # Snippets are often just page titles ("Sunrise and sunset times in ..."); read the top pages for the actual answer.
+    for res in results[:2]:
+        try:
+            ex = excerpt(page_text(res.get('url', '')), query)
+        except Exception:  # noqa: BLE001
+            continue
+        if ex:
+            lines.append(f'From {res.get("url", "")}: {ex}')
     return '\n'.join(l for l in lines if l.strip())
+
+
+def page_text(url, timeout=8, limit=400_000):
+    if not url.startswith(('http://', 'https://')):
+        return ''
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (jarvis-tars)', 'Accept': 'text/html'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        if 'html' not in (r.headers.get('Content-Type') or 'html'):
+            return ''
+        raw = r.read(limit).decode('utf-8', 'replace')
+    raw = re.sub(r'(?is)<(script|style|noscript|svg|nav|footer|header)\b.*?</\1>', ' ', raw)
+    raw = re.sub(r'(?s)<[^>]+>', ' ', raw)
+    return html.unescape(re.sub(r'\s+', ' ', raw)).strip()
+
+
+def excerpt(text, query, limit=900):
+    """The page sentences that best match the query, in page order."""
+    words = {w for w in re.findall(r'[a-z0-9]+', query.lower()) if w not in STOP and len(w) > 1}
+    if not text or not words:
+        return ''
+    sents = [x for x in re.split(r'(?<=[.!?])\s+', text) if 20 <= len(x) <= 400]
+    scored = sorted(((sum(w in x.lower() for w in words) + 0.5 * bool(re.search(r'\d', x)), i)
+                     for i, x in enumerate(sents)), reverse=True)
+    keep = sorted(i for sc, i in scored[:4] if sc >= max(1, len(words) / 3))
+    return ' '.join(sents[i] for i in keep)[:limit]
 
 
 def gemini(question, timeout=25):
@@ -160,14 +206,14 @@ def find(kind, query, private=False, log=print):
     return None, ''
 
 
-def resolve(text, first_reply, answer_with, log=print):
+def resolve(text, first_reply, answer_with, log=print, today=''):
     """Return the final spoken reply. `answer_with(note)` re-asks the local model with a NOTE added to its context."""
     kind, query = direct(text)
     asked_by_name = bool(kind)
     if not kind:
         kind, query = wants(first_reply, text)
     if not kind:
-        return scrub(first_reply)
+        return trim(scrub(first_reply))
     src, facts = find(kind, query, private=is_private(text) or is_private(query), log=log)
     if not src:
         return ("I couldn't get a straight answer from the web or from Claude just now, sir. "
@@ -177,7 +223,10 @@ def resolve(text, first_reply, answer_with, log=print):
     label = {'searx': 'a web search', 'gemini': 'Gemini', 'claude': 'Claude'}[src]
     note = (f'LOOKUP RESULT from {label} for "{query}":\n{facts}\n\nAnswer Jake now from this result in 1-3 spoken '
             'sentences, in character. Give the actual answer; mention the source only if it matters. Do not output '
-            'LOOKUP or ASK_CLAUDE again and do not say you don\'t know.')
+            'LOOKUP or ASK_CLAUDE again and do not say you don\'t know. Only state numbers, times, scores and dates '
+            'that appear in the result; if the exact one isn\'t there, say what the result does show and that you '
+            'couldn\'t confirm the rest. Work out "yesterday" or "last night" from the dates in the result'
+            + (f' (today is {today})' if today else '') + '.')
     try:
         reply = answer_with(note)
     except Exception as e:  # noqa: BLE001
@@ -185,4 +234,4 @@ def resolve(text, first_reply, answer_with, log=print):
         reply = ''
     if not reply or LOOKUP_RE.search(reply) or CLAUDE_RE.search(reply):
         reply = re.sub(r'\s+', ' ', facts.split('\n- ')[0])[:400]   # speak the source's own answer
-    return scrub(reply)
+    return scrub(reply) if src == 'claude' else trim(scrub(reply))
