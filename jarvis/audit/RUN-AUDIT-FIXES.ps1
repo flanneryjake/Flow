@@ -101,6 +101,14 @@ Step 'restart-on-failure' {
     $done -join ', '
 }
 
+# 6b. Small leftovers: the laptop Worker still polls Notion (retired), and :8766 is a redundant redirect
+Step 'JARVIS_QUEUE = github' { [Environment]::SetEnvironmentVariable('JARVIS_QUEUE', 'github', 'User') }
+Step 'tailscale serve :8766 off' {
+    $ErrorActionPreference = 'Continue'
+    tailscale serve --https=8766 off 2>&1 | ForEach-Object { Log "  tailscale: $_" }
+    if ($LASTEXITCODE) { throw 'tailscale serve off failed' }
+}
+
 # 7. Restarts, so tonight's edits go live: hub + agent, Worker (missing-input check), waker (hostname fixes)
 Step 'restart hub + agent' {
     $r = 'C:\Jarvis\tools\restart-hub-agent.ps1'
