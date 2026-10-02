@@ -93,13 +93,19 @@ def auto_depth(ghq, number, cap):
     return depth
 
 
+_LABEL_READY = []
+
+
 def ensure_label(ghq):
+    if _LABEL_READY:
+        return  # once per process
     try:
         ghq.api('POST', ghq.repo_path('/labels'),
                 {'name': AUTO_LABEL, 'color': AUTO_LABEL_SPEC[0], 'description': AUTO_LABEL_SPEC[1]})
     except ghq.GitHubError as e:
         if '422' not in str(e):  # 422 = already exists
             raise
+    _LABEL_READY.append(True)
 
 
 def decide(title, body='', labels=(), *, auto_today=0, depth=0):
