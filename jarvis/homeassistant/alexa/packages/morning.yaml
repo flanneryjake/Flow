@@ -1,9 +1,10 @@
 # Jake's weekday mornings (asked 2026-10-01): Tue-Sat alarms at 4:00, 4:10, 4:15, 4:25, 4:30, 4:35, 4:40 AM on the
-# Master bedroom Echo, and music at 4:45 AM.
+# Master bedroom Echo. Jake 2026-10-02: only the 4:30 one plays a song, so 4:30 is the Spotify wake-up (not a
+# plain alarm) and there's no separate 4:45 music any more.
 #
 # The alarms are real Alexa one-time alarms that HA sets the evening before. So "Alexa, cancel/turn off my alarms"
 # works the normal way and clears only that morning; the next scheduled evening HA sets them again.
-# Alexa's seven "alarm set" replies are muted (volume 0, then restored); then Jarvis announces the set once
+# Alexa's six "alarm set" replies are muted (volume 0, then restored); then Jarvis announces the set once
 # on the same Echo. Jake asked 2026-10-01 for "the night before at 9" with an announcement; 9 PM assumed.
 
 automation:
@@ -24,8 +25,8 @@ automation:
             {{ integration_entities('alexa_media') | select('match', 'media_player\.')
                | select('is_state_attr', 'friendly_name', 'Master bedroom') | first | default('') }}
           alarm_sensor: "{{ echo | replace('media_player.', 'sensor.') ~ '_next_alarm' }}"
-          times: ["04:00", "04:10", "04:15", "04:25", "04:30", "04:35", "04:40"]
-          spoken: ["4 AM", "4:10 AM", "4:15 AM", "4:25 AM", "4:30 AM", "4:35 AM", "4:40 AM"]
+          times: ["04:00", "04:10", "04:15", "04:25", "04:35", "04:40"]   # 4:30 is the song (jarvis_morning_music)
+          spoken: ["4 AM", "4:10 AM", "4:15 AM", "4:25 AM", "4:35 AM", "4:40 AM"]
           # Amazon doesn't always report volume; then skip muting rather than restore a guessed level.
           old_volume: "{{ state_attr(echo, 'volume_level') }}"
       - condition: template
@@ -65,16 +66,16 @@ automation:
         data:
           target: "{{ echo }}"
           message: >-
-            Jarvis here. Tomorrow's alarms are set for 4, 4:10, 4:15, 4:25, 4:30, 4:35 and 4:40,
-            and music at 4:45. Say "Alexa, cancel my alarms" to skip just tomorrow.
+            Jarvis here. Tomorrow's alarms are set for 4, 4:10, 4:15, 4:25, 4:35 and 4:40,
+            with a song at 4:30. Say "Alexa, cancel my alarms" to skip just tomorrow.
           data:
             type: announce
 
   - id: jarvis_morning_music
-    alias: Morning music at 4:45 AM (Tue-Sat)
+    alias: 4:30 AM song (Tue-Sat)
     triggers:
       - trigger: time
-        at: "04:45:00"
+        at: "04:30:00"
     conditions:
       - condition: time
         weekday: [tue, wed, thu, fri, sat]
@@ -83,6 +84,12 @@ automation:
           echo: >-
             {{ integration_entities('alexa_media') | select('match', 'media_player\.')
                | select('is_state_attr', 'friendly_name', 'Master bedroom') | first | default('') }}
+          alarm_sensor: "{{ echo | replace('media_player.', 'sensor.') ~ '_next_alarm' }}"
+      # "Alexa, cancel my alarms" skips the song too: play only while the 4:35/4:40 alarms are still set.
+      - condition: template
+        value_template: >-
+          {% set active = state_attr(alarm_sensor, 'sorted_active') | string %}
+          {{ echo != '' and ('04:35:00' in active or '04:40:00' in active) }}
       - action: media_player.play_media
         target: { entity_id: "{{ echo }}" }
         data:
