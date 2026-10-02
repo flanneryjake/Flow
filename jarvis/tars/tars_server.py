@@ -430,7 +430,8 @@ def chat(text):
                 more = msgs[:-1] + [{'role': 'user', 'content': msgs[-1]['content'].replace(
                     '[/context]', 'NOTE: ' + found + '\n[/context]')}]
                 return ollama_chat(more, num_predict=260)
-            reply = lookup.resolve(text, reply, answer_with, log=log, today=f'{now:%A %B %d %Y}')
+            reply = lookup.resolve(text, reply, answer_with, log=log, today=f'{now:%A %B %d %Y}',
+                                   check_facts=not (fx or lv))   # board / LIVE answers are already grounded
         else:
             reply = lookup.scrub(reply)
     except Exception as e:  # noqa: BLE001

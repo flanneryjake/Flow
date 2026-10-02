@@ -42,6 +42,11 @@ PRIVATE_RE = re.compile(
 BANNED_RE = re.compile(r"(?:,\s*)?\b(kid|kiddo|wicked|southie|pal|buddy)\b", re.I)
 OLD_HOME_RE = re.compile(r"[^.!?]*\b(south\s+end|southie|the\s+bean)\b[^.!?]*[.!?]?\s*", re.I)
 SENTENCE_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"])')
+# Exact-fact questions a 9B model gets confidently wrong (counts, records, years, prices, winners): always check them.
+FACT_Q_RE = re.compile(
+    r"\b(how\s+(?:many|much|old|tall|far|long\s+ago)|what\s+year|which\s+year|when\s+(?:did|was|were|is|does)|"
+    r"who\s+(?:won|wins|is\s+the|was\s+the|invented|wrote|owns|holds)|record\s+for|the\s+most|price\s+of|cost\s+of|"
+    r"championships?|titles?|population|score|banned|legal\s+in|released?|latest\s+version)\b", re.I)
 STOP = set('the a an is are was were what when where who how why do does did to of in on for at it its and or me my '
            'i you your tonight today tomorrow please jarvis hey can could tell'.split())
 
@@ -206,12 +211,14 @@ def find(kind, query, private=False, log=print):
     return None, ''
 
 
-def resolve(text, first_reply, answer_with, log=print, today=''):
+def resolve(text, first_reply, answer_with, log=print, today='', check_facts=True):
     """Return the final spoken reply. `answer_with(note)` re-asks the local model with a NOTE added to its context."""
     kind, query = direct(text)
     asked_by_name = bool(kind)
     if not kind:
         kind, query = wants(first_reply, text)
+    if not kind and check_facts and FACT_Q_RE.search(text or '') and not is_private(text):
+        kind, query = 'lookup', text      # check the model's answer against the web before saying it
     if not kind:
         return trim(scrub(first_reply))
     src, facts = find(kind, query, private=is_private(text) or is_private(query), log=log)

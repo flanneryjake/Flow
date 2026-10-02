@@ -98,5 +98,14 @@ class LookupTest(unittest.TestCase):
         self.assertIn('line one line two', seen['prompt'])
 
 
+    def test_exact_fact_questions_get_checked(self):
+        asked = []
+        with mock.patch.object(lookup, 'find', side_effect=lambda k, q, **kw: asked.append(q) or ('searx', 'x')):
+            lookup.resolve('how many championships do the celtics have', 'Eighteen, two ahead of the Lakers.',
+                           lambda note: 'Eighteen, sir.', log=lambda m: None)
+            lookup.resolve('i am so tired', 'Early night, then.', lambda note: '', log=lambda m: None)
+        self.assertEqual(asked, ['how many championships do the celtics have'])
+
+
 if __name__ == '__main__':
     unittest.main()
