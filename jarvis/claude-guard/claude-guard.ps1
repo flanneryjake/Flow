@@ -174,11 +174,19 @@ foreach ($p in $procs) {
     if ($isDesk) {
         $role = if ($anc | Where-Object { Test-Desktop $_ }) { 'desktop-helper' } else { 'desktop' }
     } elseif ($p.cmd -match '\bremote-control\b') {
-        $role = 'listener'
+        # The same server can show up as two processes (a launcher such as ~\.local\bin\claude.exe or a
+        # node shim, and the real binary it starts with the same arguments). Only the top one is the server.
+        $cliAnc = $anc | Where-Object { Test-Cli $_ } | Select-Object -First 1
+        if ($cliAnc -and $cliAnc.cmd -match '\bremote-control\b') { $role = 'nested'; $owner = $cliAnc.pid }
+        else { $role = 'listener' }
     } else {
         $cliAnc = $anc | Where-Object { Test-Cli $_ } | Select-Object -First 1
         $deskAnc = $anc | Where-Object { Test-Desktop $_ } | Select-Object -First 1
-        if ($cliAnc -and $cliAnc.cmd -match '\bremote-control\b') { $role = 'rc-session'; $owner = $cliAnc.pid }
+        if ($cliAnc -and $cliAnc.cmd -match '\bremote-control\b') {
+            $role = 'rc-session'
+            # Owner = the top remote-control process in the chain (the listener), not its launcher child.
+            $owner = (@($anc | Where-Object { (Test-Cli $_) -and $_.cmd -match '\bremote-control\b' }) | Select-Object -Last 1).pid
+        }
         elseif ($cliAnc) { $role = 'nested'; $owner = $cliAnc.pid }
         elseif ($deskAnc) { $role = 'desktop-code'; $owner = $deskAnc.pid }
         elseif ($p.cmd -match $printRx) { $role = 'headless' }
@@ -256,7 +264,12 @@ if ($listeners.Count -gt 1) {
         $keep = @($listeners | Sort-Object @{ Expression = { -not $_.taskCopy } }, created | Select-Object -First 1)
     }
     foreach ($l in $listeners) {
-        if ($keep.pid -contains $l.pid) { continue }
+        # The task's own copy is never stopped: the watchdog would only start it again. And when this run can't
+        # tell which copy is the task's (Task Scheduler didn't answer), nothing is stopped, only reported.
+        if ($keep.pid -contains $l.pid -or $l.taskCopy -or -not $taskEngine) {
+            if (-not ($keep.pid -contains $l.pid) -and -not $l.taskCopy) { $l.why = 'extra Remote Control server with no sessions (not stopped: the task copy could not be identified)' }
+            continue
+        }
         $k = Key $l
         $newDup[$k] = $nowT.ToString('o')
         $seenAt = if ($prevDup[$k]) { [datetime]::Parse("$($prevDup[$k])", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal) } else { $null }

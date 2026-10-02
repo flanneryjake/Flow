@@ -63,6 +63,23 @@ Check 'same problem pushed once' ($a.notify -eq 'alert' -and $b.notify -eq 'none
 Check 'still going after 3 h: pushed again' ($c.notify -eq 'alert')
 Check 'six busy thread sessions: alert, nothing stopped' (@($a.stopped).Count -eq 0 -and $a.alert -like '*6 Remote Control sessions (cap 4)*')
 
+# A launcher that starts the real binary with the same arguments is one server, not two.
+Remove-Item $state -Recurse -Force -ErrorAction SilentlyContinue
+$l = Run 'launcher-shim.json' '2026-10-02T23:00:00Z'
+Check 'launcher child is nested, not a second server' ((Proc $l 901).role -eq 'nested' -and (Proc $l 900).role -eq 'listener')
+Check 'session belongs to the top server' ((Proc $l 902).role -eq 'rc-session' -and (Proc $l 902).owner -eq 900)
+Check 'two real servers counted' ($l.counts.listeners -eq 2)
+$l = Run 'launcher-shim.json' '2026-10-02T23:06:00Z'
+Check 'task copy is never stopped, even idle next to a busy hand copy' ((Proc $l 202).action -eq '' -and (Proc $l 900).action -eq '')
+
+# Without Task Scheduler's answer, no Remote Control server is stopped.
+Remove-Item $state -Recurse -Force -ErrorAction SilentlyContinue
+$env:GUARD_TEST_TASK_ENGINE = ''
+$u1 = Run 'incident-run1.json' '2026-10-02T23:00:00Z'
+$u2 = Run 'incident-run2.json' '2026-10-02T23:05:00Z'
+Check 'unknown task copy: extra server reported, not stopped' ((Proc $u2 300).action -eq '' -and (Proc $u2 300).why -like '*could not be identified*')
+$env:GUARD_TEST_TASK_ENGINE = '200'
+
 # A lone listener with no sessions is never a duplicate.
 Remove-Item $state -Recurse -Force -ErrorAction SilentlyContinue
 $r4 = Run 'clean.json' '2026-10-02T23:00:00Z'
