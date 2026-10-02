@@ -11,14 +11,24 @@ automation:
   - id: jarvis_set_morning_alarms
     alias: Set tomorrow's 4 AM alarms (Mon-Fri evenings)
     mode: single
+    # HA in WSL on the junk laptop runs its long timers minutes late (9 PM fired 21:01:40, 4:30 at 4:34 on
+    # 10/02), so check the wall clock every minute instead of one long time trigger; once per evening.
     triggers:
-      - trigger: time
-        at: "21:00:00"
+      - trigger: time_pattern
+        minutes: "*"
+        id: clock
       - trigger: event          # manual re-run: fire event jarvis_set_morning_alarms
         event_type: jarvis_set_morning_alarms
+        id: manual
     conditions:
       - condition: time
         weekday: [mon, tue, wed, thu, fri]
+      - condition: template
+        value_template: >-
+          {% set hm = now().strftime('%H:%M') %}
+          {% set last = this.attributes.last_triggered %}
+          {{ trigger.id == 'manual' or ('21:00' <= hm < '21:15'
+             and (last is none or as_local(last).date() != now().date())) }}
     actions:
       - variables:
           echo: >-
@@ -73,12 +83,17 @@ automation:
 
   - id: jarvis_morning_music
     alias: 4:30 AM song (Tue-Sat)
-    triggers:
-      - trigger: time
-        at: "04:30:00"
+    triggers:                   # wall clock every minute, see the 9 PM automation above
+      - trigger: time_pattern
+        minutes: "*"
     conditions:
       - condition: time
         weekday: [tue, wed, thu, fri, sat]
+      - condition: template
+        value_template: >-
+          {% set hm = now().strftime('%H:%M') %}
+          {% set last = this.attributes.last_triggered %}
+          {{ '04:30' <= hm < '04:40' and (last is none or as_local(last).date() != now().date()) }}
     actions:
       - variables:
           echo: >-
