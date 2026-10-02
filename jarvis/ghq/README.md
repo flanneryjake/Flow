@@ -69,9 +69,50 @@ for card in cards:
 - Keep polling every 60 s as the fallback. Two PCs polling every minute is about 120 of the 5,000 calls an
   hour the token allows, and ETag 304s are free.
 
-CLI equivalents: `python ghq.py ready --machine homebase`, `claim 12 --machine rig`,
+CLI equivalents: `python ghq.py ready --machine homebase`, `now "Print plate 5" --watch`, `watch 12`, `claim 12 --machine rig`,
 `log 12 --machine rig --outcome done --started 2026-09-30T10:00:00Z --log-file task.txt`, `approve 12`,
 `ask 12 "Which printer?"`, `new "Title" --machine rig --priority p1`, `usage --days 7`.
+
+## "Do it now" lane (rig → homebase)
+
+Jake types a task on the rig and homebase starts it at once, pausing whatever card it is running.
+
+On the rig, either type `/homebase print plate 5` in Claude Code (copy `homebase-command.md` to
+`%USERPROFILE%\.claude\commands\homebase.md`), or run it directly:
+
+```
+python C:\Jarvis\ghq\ghq.py now "Print plate 5" --machine homebase --watch
+```
+
+That files an approved card labelled `now` + `p0` (Jake typed it, so it needs no second approval; the guardrails
+still apply to what the run may do), POSTs `/wake` to every URL in `JARVIS_WAKE_URLS`, and with `--watch` prints
+the card's progress until it finishes. The rig needs `JARVIS_WAKE_URLS` pointing at the `/wake` URL of whichever
+PC runs the homebase Worker (the 5060, LAPTOP-4150EGRS at 100.85.255.99, since 2026-10-02; the junk laptop
+before that), alongside its `GITHUB_TASKS_TOKEN`. If that PC's Worker claims cards under another machine name
+(for example `laptop`), set `JARVIS_NOW_MACHINE` to that name on the rig so `now` cards are labelled for it.
+
+What `agent.py` does with it:
+
+1. **Wake.** `POST /wake` ends the poll sleep. If a card is already running, it instead sets a flag that the
+   run's watcher thread checks.
+2. **Check while running.** While a card runs, a watcher thread calls `ghq.now_waiting(MACHINE, etag_file)`
+   every 15 s and whenever `/wake` fires (an unchanged queue is a free ETag 304).
+3. **Pause.** If a `now` card is waiting and the running card is not itself a `now` card: kill the Claude
+   process tree (`taskkill /T /F /PID <pid>`), then `ghq.log_run(current, MACHINE, 'paused', started=...,
+   summary='Paused for #N')`. The paused card goes back to approved with a `resume` label, and `ready()` puts
+   it right after the `now` cards, so it runs next. Its prompt should say "this run was interrupted; check
+   the work folder and continue from where it stopped". A `now` card never pauses another `now` card; they run
+   in the order Jake typed them. Hardware already started (a print underway) keeps going; only the Claude run
+   stops.
+4. **Run it.** Claim and run the `now` card as usual (`ready()` already sorts `now` cards first).
+5. **Progress.** Run Claude with `--output-format stream-json --verbose` so output arrives as it happens. 30 s
+   into any run, and every 30 s after that while something new has happened, call
+   `cid = ghq.progress(number, MACHINE, text, cid)` with the elapsed time and the latest step (last tool call
+   or assistant line, secrets redacted). It edits one comment rather than adding new ones. Runs shorter than
+   30 s post no progress, just the usual run comment.
+6. **Out of usage.** If the Worker is paused on the Claude usage limit when a `now` card arrives, post
+   `ghq.progress(number, MACHINE, 'Homebase is out of Claude usage until <time>; this runs first when it resets.')`
+   so the rig sees why nothing is happening.
 
 ## Phone hub
 
