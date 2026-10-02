@@ -1,0 +1,173 @@
+# Filament watch: pause the Adventurer 5M Pro when the spool can't finish the job and Jake is away.
+# Needs in secrets.yaml: ff_detail_body / ff_pause_body (see README), and the spool scale (spool-scale.yaml)
+# adopted in Settings > Devices > ESPHome. Resume is never automatic: Jake taps Resume on the printer or in the hub.
+
+input_number:
+  spool_empty_weight:
+    name: Empty spool weight
+    icon: mdi:printer-3d-nozzle-outline
+    min: 0
+    max: 600
+    step: 5
+    unit_of_measurement: g
+    initial: 230
+  filament_safety_margin:
+    name: Filament safety margin
+    icon: mdi:shield-outline
+    min: 0
+    max: 200
+    step: 5
+    unit_of_measurement: g
+    initial: 25
+
+input_boolean:
+  filament_watch:
+    name: Filament watch
+    icon: mdi:eye-check
+    initial: true
+
+rest:
+  - resource: !secret ff_detail_url
+    method: POST
+    headers:
+      Content-Type: application/json
+    payload: !secret ff_detail_body
+    scan_interval: 60
+    timeout: 10
+    sensor:
+      - name: Printer status
+        unique_id: ff_printer_status
+        icon: mdi:printer-3d
+        value_template: "{{ value_json.detail.status | default('unknown') }}"
+      - name: Printer progress
+        unique_id: ff_printer_progress
+        unit_of_measurement: "%"
+        value_template: "{{ ((value_json.detail.printProgress | float(0)) * 100) | round(1) }}"
+      - name: Printer job filament
+        unique_id: ff_printer_job_grams
+        unit_of_measurement: g
+        value_template: "{{ value_json.detail.estimatedRightWeight | float(0) | round(1) }}"
+      - name: Printer job file
+        unique_id: ff_printer_job_file
+        value_template: "{{ value_json.detail.printFileName | default('') }}"
+
+rest_command:
+  ff_pause:
+    url: !secret ff_control_url
+    method: POST
+    content_type: application/json
+    payload: !secret ff_pause_body
+    timeout: 10
+
+template:
+  - sensor:
+      - name: Filament left
+        unique_id: filament_left_grams
+        unit_of_measurement: g
+        icon: mdi:printer-3d-nozzle
+        availability: "{{ has_value('sensor.spool_scale_weight') }}"
+        state: >
+          {{ [0, states('sensor.spool_scale_weight') | float(0)
+                 - states('input_number.spool_empty_weight') | float(0)] | max | round(0) }}
+      - name: Filament job still needs
+        unique_id: filament_job_needs_grams
+        unit_of_measurement: g
+        icon: mdi:printer-3d-nozzle-alert
+        state: >
+          {% set total = states('sensor.printer_job_filament') | float(0) %}
+          {% set done = states('sensor.printer_progress') | float(0) / 100 %}
+          {{ (total * (1 - done)) | round(0) if total > 0 else 0 }}
+  - binary_sensor:
+      - name: Filament short for job
+        unique_id: filament_short_for_job
+        icon: mdi:alert-circle
+        device_class: problem
+        availability: "{{ has_value('sensor.filament_left') }}"
+        state: >
+          {{ states('sensor.printer_status') == 'printing'
+             and states('sensor.filament_job_still_needs') | float(0) > 0
+             and states('sensor.filament_left') | float(0)
+                 < states('sensor.filament_job_still_needs') | float(0)
+                   + states('input_number.filament_safety_margin') | float(0) }}
+
+automation:
+  - id: filament_watch_pause_when_away
+    alias: Filament watch - pause when short and Jake is away
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.filament_short_for_job
+        to: "on"
+        for: "00:02:00"   # ignore the spool being tugged or bumped
+    conditions:
+      - condition: state
+        entity_id: input_boolean.filament_watch
+        state: "on"
+      # Anything but "home" counts as away, so a phone that lost location still gets the safe behaviour.
+      - condition: template
+        value_template: "{{ not is_state('person.jake', 'home') }}"
+    actions:
+      - action: rest_command.ff_pause
+      - action: script.filament_watch_alert
+        data:
+          title: "Print paused: filament low"
+          message: >
+            {{ states('sensor.filament_left') }} g left, the job still needs about
+            {{ states('sensor.filament_job_still_needs') }} g ({{ states('sensor.printer_job_file') }},
+            {{ states('sensor.printer_progress') }}% done). Swap the spool, then tap Resume.
+
+  - id: filament_watch_warn_when_home
+    alias: Filament watch - heads-up when short and Jake is home
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.filament_short_for_job
+        to: "on"
+        for: "00:02:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.filament_watch
+        state: "on"
+      - condition: state
+        entity_id: person.jake
+        state: home
+    actions:
+      - action: script.filament_watch_alert
+        data:
+          title: "Filament won't finish this print"
+          message: >
+            {{ states('sensor.filament_left') }} g left, the job still needs about
+            {{ states('sensor.filament_job_still_needs') }} g. Not paused because you're home.
+
+script:
+  filament_watch_alert:
+    alias: Filament watch alert with a spool photo
+    mode: queued
+    fields:
+      title: {}
+      message: {}
+    sequence:
+      # Blink is cloud-only: ask it for a fresh frame, give the cloud a moment, then save it.
+      - action: blink.trigger_camera
+        continue_on_error: true
+        target:
+          entity_id: camera.spool
+      - delay: "00:00:08"
+      - action: homeassistant.update_entity
+        continue_on_error: true
+        target:
+          entity_id: camera.spool
+      - action: camera.snapshot
+        continue_on_error: true
+        target:
+          entity_id: camera.spool
+        data:
+          filename: /config/www/filament/spool.jpg
+      - action: notify.notify
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+          data:
+            image: "/local/filament/spool.jpg?t={{ now().timestamp() | int }}"
+            push:
+              interruption-level: time-sensitive
