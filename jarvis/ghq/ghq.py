@@ -688,6 +688,15 @@ def _is_full_path(path):
     return bool(re.match(r'^[A-Za-z]:[\\/]', path) or path.startswith('\\\\') or path.startswith('/'))
 
 
+def clean_path(path):
+    """A file path as written by a model, minus quotes and any trailing description: `scan.csv (raw output)`
+    or `scan.csv - the export` would otherwise be watched literally and never show up."""
+    p = str(path).strip().strip('"`\'').strip()
+    p = re.sub(r'\s+\([^()]*\)$', '', p)
+    p = re.sub(r'\s+[-\u2013\u2014]\s+.*$', '', p)
+    return p.strip().strip('"`\'')
+
+
 def parent_of(issue_or_number):
     """The card this one was spawned from ("Spawned from #N" in the body), or None."""
     issue = issue_or_number if isinstance(issue_or_number, dict) else api('GET', repo_path(f'/issues/{issue_or_number}'))
@@ -697,7 +706,7 @@ def parent_of(issue_or_number):
 
 def full_output_path(name, producer):
     """A full path for a bare file name, in the producing card's own folder under OUTPUT_ROOT."""
-    name = re.split(r'[\\/]', name.strip().strip('"`'))[-1]
+    name = re.split(r'[\\/]', clean_path(name))[-1]
     sep = '\\' if '\\' in OUTPUT_ROOT else '/'
     return sep.join([OUTPUT_ROOT.rstrip('\\/'), f'card-{producer}', name])
 
@@ -762,7 +771,7 @@ def snooze_until(number, kind, value, machine, reason='', producer=None):
     if kind not in SNOOZE_KINDS:
         raise ValueError(f'snooze kind must be one of {SNOOZE_KINDS}')
     if kind == 'file':
-        value = str(value).strip().strip('"`')
+        value = clean_path(value)
         if not _is_full_path(value):
             producer = producer or parent_of(number)
             if not producer:
@@ -875,7 +884,7 @@ def condition_met(s, exists=os.path.exists, closed=None):
     """`closed`: optional set of recently closed card numbers, so a sweep checks every card condition with one call."""
     kind, value = s.get('kind'), s.get('value')
     if kind == 'file':
-        return bool(value) and exists(value)
+        return bool(value) and (exists(value) or exists(clean_path(value)))  # older records kept descriptions
     if kind == 'card':
         if closed is not None:
             return int(value) in closed
