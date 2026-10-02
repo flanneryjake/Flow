@@ -72,6 +72,7 @@ RUN_MARK = '<!-- jarvis:run -->'
 PROGRESS_MARK = '<!-- jarvis:progress -->'
 CLAIM_RE = re.compile(r'^<!-- jarvis:claim (\S+) (\S+) -->')
 META_RE = re.compile(r'<!-- jarvis:meta (\{.*?\}) -->')
+RESET_MARK = '<!-- jarvis:reset -->'  # on approve / ask_jake comments: earlier claims and failed runs no longer count
 
 
 class GitHubError(Exception):
@@ -149,6 +150,13 @@ def now_iso():
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _parse_time(s):
+    """ISO time -> aware datetime. Drops fractional seconds (Python < 3.11 rejects PowerShell's 7 digits) and
+    reads a time without an offset as this PC's local time."""
+    t = dt.datetime.fromisoformat(re.sub(r'\.\d+', '', s.strip()).replace('Z', '+00:00'))
+    return t if t.tzinfo else t.astimezone()
+
+
 def label_names(issue):
     return [l['name'] if isinstance(l, dict) else l for l in issue.get('labels', [])]
 
@@ -173,6 +181,7 @@ def set_status(number, status, extra_add=(), extra_remove=()):
     names = [n for n in label_names(issue) if not n.startswith('status:') and n not in extra_remove]
     names += [f'status:{status}'] + [n for n in extra_add if n not in names]
     api('PUT', repo_path(f'/issues/{number}/labels'), {'labels': names})
+    return issue
 
 
 def comment(number, text):
@@ -229,12 +238,19 @@ def ready(machine, use_etag_file=None):
     status, data, headers = request('GET', path, etag=cache.get('etag'))
     if status == 304:
         data = cache.get('data', [])
-    elif use_etag_file:
-        slim = [{'number': i['number'], 'title': i['title'], 'labels': label_names(i),
-                 'created_at': i['created_at'], 'pull_request': i.get('pull_request')} for i in data]
-        with open(use_etag_file, 'w', encoding='utf-8') as f:
-            json.dump({'etag': headers.get('ETag') or headers.get('etag'), 'data': slim}, f)
-        data = slim
+    else:
+        etag = headers.get('ETag') or headers.get('etag')
+        if len(data) >= 100:
+            # More than one page: page 1's ETag can't vouch for the later pages, so read them all and don't
+            # cache an ETag (every poll re-reads until the queue is back under 100).
+            data = paged(path)
+            etag = None
+        if use_etag_file:
+            slim = [{'number': i['number'], 'title': i['title'], 'labels': label_names(i),
+                     'created_at': i['created_at'], 'pull_request': i.get('pull_request')} for i in data]
+            with open(use_etag_file, 'w', encoding='utf-8') as f:
+                json.dump({'etag': etag, 'data': slim}, f)
+            data = slim
     out = []
     for i in data:
         names = label_names(i)
@@ -284,12 +300,20 @@ def claim(number, machine):
     since_last_run = []
     for c in comments:
         body = c.get('body') or ''
-        if body.startswith(RUN_MARK):
+        if body.startswith(RUN_MARK) or RESET_MARK in body:
+            # A run, an approval or a question to Jake ends every earlier claim (a Worker that crashed or
+            # asked Jake mid-run never logs a run).
             since_last_run = []
         elif CLAIM_RE.match(body):
             since_last_run.append(c)
-    winner = since_last_run[0] if since_last_run else None
-    if not winner or winner['id'] != mine['id']:
+    winner = CLAIM_RE.match(since_last_run[0]['body']) if since_last_run else None
+    # Compare the nonce, not the comment id: a POST retried after a 502 can leave two copies of our claim.
+    won = bool(winner) and winner.group(1) == machine and winner.group(2) == nonce
+    if won:
+        # The ready() list may be stale: the card can have been run, closed or parked since.
+        issue = api('GET', repo_path(f'/issues/{number}'))
+        won = status_of(issue) == 'approved' and not any(n.startswith('claimed:') for n in label_names(issue))
+    if not won:
         api('DELETE', repo_path(f'/issues/comments/{mine["id"]}'))
         return False
     set_status(number, 'working', extra_add=[f'claimed:{machine}'], extra_remove=['resume'])
@@ -315,10 +339,9 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
     minutes = ''
     if started:
         try:
-            a = dt.datetime.fromisoformat(started.replace('Z', '+00:00'))
-            b = dt.datetime.fromisoformat(ended.replace('Z', '+00:00'))
+            a, b = _parse_time(started), _parse_time(ended)
             minutes = f'{(b - a).total_seconds() / 60:.1f}'
-        except ValueError:
+        except (ValueError, TypeError):
             pass
     meta = {'machine': machine, 'outcome': outcome, 'started': started, 'ended': ended, 'minutes': minutes,
             'model': model}
@@ -358,8 +381,11 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
 
 
 def runs_of(number):
+    """Run metadata since the card was last approved or stopped for Jake, oldest first."""
     out = []
     for c in paged(repo_path(f'/issues/{number}/comments')):
+        if RESET_MARK in (c.get('body') or ''):
+            out = []
         m = re.search(r'<!-- jarvis:runmeta (\{.*?\}) -->', c.get('body') or '')
         if m:
             out.append(json.loads(m.group(1)))
@@ -385,14 +411,18 @@ def new_card(title, body='', machine='any', priority=None, status='staged', card
 
 def approve(number, by='hub'):
     """Approve a card. The phone hub checks the PIN itself before calling this for a card labelled 'pin'."""
-    set_status(number, 'approved')
-    comment(number, f'Approved via {by} at {now_iso()}')
+    # Clears a claim left by a Worker that crashed, and reopens a closed card so ready() sees it again.
+    issue = set_status(number, 'approved', extra_remove=[f'claimed:{m}' for m in MACHINES])
+    if issue.get('state') == 'closed':
+        api('PATCH', repo_path(f'/issues/{number}'), {'state': 'open'})
+    comment(number, f'Approved via {by} at {now_iso()}\n{RESET_MARK}')
     wake()
 
 
 def ask_jake(number, question):
+    # Question first, so anyone who sees the needs-jake label can already read it.
+    comment(number, f'**Needs Jake:** {question}\n{RESET_MARK}')
     set_status(number, 'needs-jake', extra_remove=[f'claimed:{m}' for m in MACHINES])
-    comment(number, f'**Needs Jake:** {question}')
 
 
 # ---------------------------------------------------------------------------- the "now" lane
