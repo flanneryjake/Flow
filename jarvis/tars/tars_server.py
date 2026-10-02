@@ -404,7 +404,9 @@ def chat(text):
     mem = read_json(SUMMARY, {})
     summary = mem.get('summary', '') if mem.get('at', '') >= PERSONA_SINCE else ''
     now = dt.datetime.now()
-    ctx = [f'Now: {now:%A, %B} {now.day}, {now.year}, {now:%I:%M %p}'.replace(' 0', ' ') +
+    part = ('night' if now.hour < 5 or now.hour >= 22 else 'morning' if now.hour < 12 else
+            'afternoon' if now.hour < 17 else 'evening')
+    ctx = [f'Now: {now:%A} {part}, {now:%B} {now.day}, {now.year}, {now:%I:%M %p}'.replace(' 0', ' ') +
            f' (yesterday was {now - dt.timedelta(days=1):%A %B %d}). Humor setting: {humor()}%.']
     jf = jake_facts()
     if jf:
@@ -412,7 +414,8 @@ def chat(text):
                    'happening now; don\'t recite it):\n' + jf)
     if summary:
         ctx.append('Memory of earlier conversations: ' + summary)
-    lv = '' if fm else '\n'.join(x for x in (live.facts(text, log=log), home.facts(text)) if x)
+    hf = '' if fm else home.facts(text)
+    lv = '' if fm else '\n'.join(x for x in (live.facts(text, log=log), hf) if x)
     if lv:
         ctx.append('LIVE (fresh data; answer from it, do not LOOKUP these):\n' + lv)
     if fx:
@@ -430,8 +433,13 @@ def chat(text):
                 more = msgs[:-1] + [{'role': 'user', 'content': msgs[-1]['content'].replace(
                     '[/context]', 'NOTE: ' + found + '\n[/context]')}]
                 return ollama_chat(more, num_predict=260)
-            reply = lookup.resolve(text, reply, answer_with, log=log, today=f'{now:%A %B %d %Y}',
-                                   check_facts=not (fx or lv))   # board / LIVE answers are already grounded
+            if hf:   # alarms / what's playing: the HA snapshot is the only truth; never web-search it
+                reply = lookup.trim(lookup.scrub(reply))
+                if lookup.LOOKUP_RE.search(reply) or lookup.CLAUDE_RE.search(reply) or lookup.GAVE_UP_RE.search(reply):
+                    reply = lookup.trim(hf.replace('\n', ' '))
+            else:
+                reply = lookup.resolve(text, reply, answer_with, log=log, today=f'{now:%A %B %d %Y}',
+                                       check_facts=not (fx or lv))   # board / LIVE answers are already grounded
         else:
             reply = lookup.scrub(reply)
     except Exception as e:  # noqa: BLE001

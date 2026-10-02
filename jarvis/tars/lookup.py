@@ -46,7 +46,9 @@ SENTENCE_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"])')
 FACT_Q_RE = re.compile(
     r"\b(how\s+(?:many|much|old|tall|far|long\s+ago)|what\s+year|which\s+year|when\s+(?:did|was|were|is|does)|"
     r"who\s+(?:won|wins|is\s+the|was\s+the|invented|wrote|owns|holds)|record\s+for|the\s+most|price\s+of|cost\s+of|"
-    r"championships?|titles?|population|score|banned|legal\s+in|released?|latest\s+version)\b", re.I)
+    r"championships?|titles?|population|score|banned|legal\s+in|released?|latest\s+version|"
+    r"deathtouch|first\s+strike|double\s+strike|trample|lifelink|hexproof|indestructible|"
+    r"commander\s+tax|mana\s+value)\b", re.I)
 STOP = set('the a an is are was were what when where who how why do does did to of in on for at it its and or me my '
            'i you your tonight today tomorrow please jarvis hey can could tell'.split())
 
@@ -215,10 +217,12 @@ def resolve(text, first_reply, answer_with, log=print, today='', check_facts=Tru
     """Return the final spoken reply. `answer_with(note)` re-asks the local model with a NOTE added to its context."""
     kind, query = direct(text)
     asked_by_name = bool(kind)
+    checking = False
     if not kind:
         kind, query = wants(first_reply, text)
     if not kind and check_facts and FACT_Q_RE.search(text or '') and not is_private(text):
         kind, query = 'lookup', text      # check the model's answer against the web before saying it
+        checking = True
     if not kind:
         return trim(scrub(first_reply))
     src, facts = find(kind, query, private=is_private(text) or is_private(query), log=log)
@@ -241,4 +245,6 @@ def resolve(text, first_reply, answer_with, log=print, today='', check_facts=Tru
         reply = ''
     if not reply or LOOKUP_RE.search(reply) or CLAUDE_RE.search(reply):
         reply = re.sub(r'\s+', ' ', facts.split('\n- ')[0])[:400]   # speak the source's own answer
-    return scrub(reply) if src == 'claude' else trim(scrub(reply))
+    if src == 'claude':
+        return scrub(reply)
+    return trim(scrub(reply), 1 if checking else 2)   # a checked fact is one sentence: extras are where errors live
