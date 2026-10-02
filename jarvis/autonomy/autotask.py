@@ -6,10 +6,14 @@ straight into status:approved with an `auto` label and a comment saying which ru
 ask_once or pin is filed staged, exactly as before, with the reason in a comment so the hub can show it.
 
 Limits that keep it from running away (all overridable by environment variable):
-  JARVIS_AUTO_PER_DAY   auto-approved cards per UTC day, default 25; after that cards are filed staged
+  JARVIS_AUTO_PER_DAY   auto-approved cards per day, default 100; the day resets at 8 PM US Eastern
+                        (clock.py). After that cards are filed staged with `sched:deferred`, and
+                        scheduler.py promotes the best of them after the reset.
   JARVIS_AUTO_DEPTH     how many auto cards may chain off one another, default 3
   JARVIS_AUTO_OFF       set to 1 to file everything staged (the kill switch; the hub can set it)
-Duplicates (an open card with the same normalized title) are not filed again; the existing number is returned.
+Duplicates are not filed again (dedupe.py: same normalized title or near-identical goal among open cards and
+cards closed in the last 7 days, or a selftest that already failed for a by-hand reason); the existing number
+is returned with status 'duplicate' or 'rejected', and the reason is logged.
 
     import autotask
     number, status, why = autotask.propose('Test ff_printer.py against the printer', body, machine='rig',
@@ -19,7 +23,6 @@ CLI: python autotask.py propose "title" [--body TEXT] [--machine rig] [--priorit
      python autotask.py check "title" [--body TEXT]      (classify only, files nothing)
 """
 import argparse
-import datetime as dt
 import json
 import os
 import re
@@ -30,11 +33,15 @@ for p in (HERE, os.path.join(HERE, '..', 'ghq'), r'C:\Jarvis\ghq'):
     if p not in sys.path:
         sys.path.append(p)
 
+import clock  # noqa: E402
+import dedupe  # noqa: E402
 from classify import classify  # noqa: E402
 
 AUTO_LABEL = 'auto'
 AUTO_LABEL_SPEC = ('0e8a16', 'Filed and approved by Jarvis under the guardrail policy')
 SPAWN_RE = re.compile(r'Spawned from #(\d+)')
+DEFERRED_LABEL = 'sched:deferred'
+DEFAULT_PER_DAY = 100
 
 
 def _ghq():
@@ -61,8 +68,9 @@ def find_duplicate(title, open_issues):
     return None
 
 
-def auto_count_today(ghq):
-    since = dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT00:00:00Z')
+def auto_count_today(ghq, now=None):
+    """Auto cards filed since the last cap reset (8 PM US Eastern)."""
+    since = clock.iso(clock.last_reset(now))
     issues = ghq.paged(ghq.repo_path(f'/issues?state=all&labels={AUTO_LABEL}&since={since}'))
     return sum(1 for i in issues if (i.get('created_at') or '') >= since)
 
@@ -99,24 +107,31 @@ def decide(title, body='', labels=(), *, auto_today=0, depth=0):
         return 'staged', why + '; auto-approval is switched off'
     if tier not in ('free', 'free_logged'):
         return 'staged', why
-    if auto_today >= _limit('JARVIS_AUTO_PER_DAY', 25):
-        return 'staged', why + f'; daily auto limit of {_limit("JARVIS_AUTO_PER_DAY", 25)} reached'
+    if auto_today >= _limit('JARVIS_AUTO_PER_DAY', DEFAULT_PER_DAY):
+        return 'staged', why + f'; daily auto limit of {_limit("JARVIS_AUTO_PER_DAY", DEFAULT_PER_DAY)} reached'
     if depth >= _limit('JARVIS_AUTO_DEPTH', 3):
         return 'staged', why + f'; {depth} auto cards already chained, a person should look'
     return 'approved', why
 
 
-def propose(title, body='', machine='any', priority=None, card_type='task', spawned_from=None, source='Jarvis'):
-    """File a card, approving it when policy allows. Returns (number, status, why); status 'duplicate' when an
-    open card with the same title already exists."""
+def propose(title, body='', machine='any', priority=None, card_type='task', spawned_from=None, source='Jarvis',
+            extra_labels=()):
+    """File a card, approving it when policy allows. Returns (number, status, why); status 'duplicate' (an open
+    or recently closed card matches) or 'rejected' (a selftest that already failed by hand) files nothing and
+    returns the existing card's number."""
     ghq = _ghq()
-    dup = find_duplicate(title, ghq.paged(ghq.repo_path('/issues?state=open')))
-    if dup:
-        return dup, 'duplicate', 'an open card with the same title exists'
+    issues, comments_of, history = dedupe.gather(ghq, title)
+    hit = dedupe.check(title, body, issues, comments_of=comments_of, selftest_history=history)
+    if hit:
+        dedupe.log_reject(title, *hit, source=source)
+        return hit
     depth = auto_depth(ghq, spawned_from, _limit('JARVIS_AUTO_DEPTH', 3)) if spawned_from else 0
     status, why = decide(title, body, auto_today=auto_count_today(ghq), depth=depth)
     tier = why.split()[1]
     extra = [AUTO_LABEL] if status == 'approved' else []
+    if 'daily auto limit' in why:
+        extra.append(DEFERRED_LABEL)
+    extra += [l for l in extra_labels if l not in extra]
     if status == 'approved':
         ensure_label(ghq)
     number = ghq.new_card(title, body, machine=machine, priority=priority, status=status, card_type=card_type,
@@ -141,12 +156,14 @@ def main(argv=None):
             s.add_argument('--type', default='task', dest='card_type')
             s.add_argument('--spawned-from', type=int)
             s.add_argument('--source', default='Jarvis')
+            s.add_argument('--label', action='append', default=[], dest='labels', help='extra label (repeatable)')
     a = ap.parse_args(argv)
     if a.cmd == 'check':
         status, why = decide(a.title, a.body)
         print(json.dumps({'would_file_as': status, 'why': why}))
         return 0
-    number, status, why = propose(a.title, a.body, a.machine, a.priority, a.card_type, a.spawned_from, a.source)
+    number, status, why = propose(a.title, a.body, a.machine, a.priority, a.card_type, a.spawned_from, a.source,
+                                  a.labels)
     print(json.dumps({'number': number, 'status': status, 'why': why}))
     return 0
 

@@ -1,63 +1,19 @@
 """Tests for autotask.py against an in-memory fake of ghq. Run: python -m unittest test_autotask"""
 import os
 import sys
-import types
+import tempfile
 import unittest
 
 import autotask
-
-
-def fake_ghq(existing=()):
-    g = types.SimpleNamespace()
-    g.issues = {i['number']: i for i in existing}
-    g.comments, g.woke = [], 0
-
-    class GitHubError(Exception):
-        pass
-    g.GitHubError = GitHubError
-    g.repo_path = lambda s='': '/repos/x/y' + s
-    g.label_names = lambda i: [l['name'] if isinstance(l, dict) else l for l in i.get('labels', [])]
-    g.now_iso = lambda: '2026-09-30T20:00:00Z'
-
-    def paged(path):
-        out = list(g.issues.values())
-        if 'labels=auto' in path:
-            out = [i for i in out if 'auto' in g.label_names(i)]
-        if 'state=open' in path:
-            out = [i for i in out if i.get('state', 'open') == 'open']
-        return out
-    g.paged = paged
-
-    def api(method, path, body=None):
-        if method == 'GET':
-            return g.issues[int(path.rsplit('/', 1)[1])]
-        if path.endswith('/labels'):
-            return {}
-        raise AssertionError(path)
-    g.api = api
-
-    def new_card(title, body='', machine='any', priority=None, status='staged', card_type='task', pin=False,
-                 spawned_from=None, extra_labels=()):
-        n = max(g.issues, default=0) + 1
-        if spawned_from:
-            body = (body + f'\n\nSpawned from #{spawned_from}').strip()
-        labels = [f'status:{status}', f'machine:{machine}'] + list(extra_labels) + (['pin'] if pin else [])
-        g.issues[n] = {'number': n, 'title': title, 'body': body, 'labels': labels, 'state': 'open',
-                       'created_at': '2026-09-30T20:00:00Z'}
-        return n
-    g.new_card = new_card
-    g.comment = lambda n, t: g.comments.append((n, t))
-
-    def wake():
-        g.woke += 1
-    g.wake = wake
-    return g
+from fakeghq import ago, fake_ghq, runmeta
 
 
 class AutotaskTest(unittest.TestCase):
     def setUp(self):
-        for k in ('JARVIS_AUTO_OFF', 'JARVIS_AUTO_PER_DAY', 'JARVIS_AUTO_DEPTH'):
+        for k in ('JARVIS_AUTO_OFF', 'JARVIS_AUTO_PER_DAY', 'JARVIS_AUTO_DEPTH', 'JARVIS_DEDUPE_JACCARD'):
             os.environ.pop(k, None)
+        self.logdir = tempfile.mkdtemp()
+        os.environ['JARVIS_LOG_DIR'] = self.logdir
 
     def use(self, g):
         autotask._ghq = lambda: g
@@ -69,7 +25,7 @@ class AutotaskTest(unittest.TestCase):
         self.assertIn('auto', g.issues[n]['labels'])
         self.assertIn('status:approved', g.issues[n]['labels'])
         self.assertEqual(g.woke, 1)
-        self.assertTrue(g.comments[0][1].startswith('Auto-approved'))
+        self.assertTrue(g.posted[0][1].startswith('Auto-approved'))
 
     def test_pin_card_is_staged_with_pin_label(self):
         g = fake_ghq(); self.use(g)
@@ -91,6 +47,7 @@ class AutotaskTest(unittest.TestCase):
         n, status, why = autotask.propose('Wire Phase 1/2 output straight in')
         self.assertEqual(status, 'staged')
         self.assertIn('daily auto limit', why)
+        self.assertIn('sched:deferred', g.issues[n]['labels'])
 
     def test_chain_depth_limit(self):
         os.environ['JARVIS_AUTO_DEPTH'] = '2'
@@ -112,6 +69,45 @@ class AutotaskTest(unittest.TestCase):
         os.environ['JARVIS_AUTO_OFF'] = '1'
         g = fake_ghq(); self.use(g)
         self.assertEqual(autotask.propose('Wire Phase 1/2 output straight in')[1], 'staged')
+
+    def test_recently_closed_duplicate_is_rejected_and_logged(self):
+        g = fake_ghq([{'number': 3, 'title': '[QOL] Printer queue watchdog', 'state': 'closed',
+                       'closed_at': ago(3), 'updated_at': ago(3)}])
+        self.use(g)
+        n, status, why = autotask.propose('Printer queue watchdog')
+        self.assertEqual((n, status), (3, 'duplicate'))
+        self.assertEqual(len(g.issues), 1)
+        with open(os.path.join(self.logdir, 'autotask-rejects.jsonl')) as f:
+            self.assertIn('Printer queue watchdog', f.read())
+
+    def test_old_closed_card_does_not_block(self):
+        g = fake_ghq([{'number': 3, 'title': 'Printer queue watchdog', 'state': 'closed',
+                       'closed_at': ago(40), 'updated_at': ago(40)}])
+        self.use(g)
+        self.assertEqual(autotask.propose('Printer queue watchdog')[1], 'approved')
+
+    def test_near_identical_goal_is_duplicate(self):
+        g = fake_ghq([{'number': 4, 'title': 'Summarize printer errors',
+                       'body': 'Goal: read the Flashforge log and list every jam and heater error this week'}])
+        self.use(g)
+        n, status, why = autotask.propose('Summarize the printer errors',
+                                          'Goal: read the Flashforge log and list every jam and heater error this week.')
+        self.assertEqual((n, status), (4, 'duplicate'))
+        self.assertIn('near-identical', why)
+
+    def test_selftest_that_failed_by_hand_is_rejected(self):
+        g = fake_ghq([{'number': 5, 'title': 'GATE TEST 2: printer selftest', 'state': 'closed',
+                       'closed_at': ago(40), 'updated_at': ago(40)}],
+                     comments={5: [runmeta('failed', extra='Jake has to load the filament by hand first.')]})
+        self.use(g)
+        n, status, why = autotask.propose('GATE TEST 3: printer selftest')
+        self.assertEqual((n, status), (5, 'rejected'))
+        self.assertEqual(len(g.issues), 1)
+
+    def test_extra_labels_pass_through(self):
+        g = fake_ghq(); self.use(g)
+        n = autotask.propose('Look at the rig log', extra_labels=['agent:claude'])[0]
+        self.assertIn('agent:claude', g.issues[n]['labels'])
 
     def test_check_cli_needs_no_token(self):
         os.environ.pop('GITHUB_TASKS_TOKEN', None)
