@@ -130,7 +130,7 @@ Say ''
 Say '== Done ==' 'Green'
 $results.GetEnumerator() | ForEach-Object { Say ("  {0}: {1}" -f $_.Key, $_.Value) 'Green' }
 Say ''
-Say 'Health snapshot (also written to this machine's Health issue in flanneryjake/jarvis-tasks):'
+Say 'Health snapshot (also written to this machine''s Health issue in flanneryjake/jarvis-tasks):'
 Write-Host $snap
 Say ''
 Say "Check: in the Claude app's Code tab you should now see a session named '$machine'." 'Yellow'
