@@ -389,6 +389,7 @@ def new_card(title, body='', machine='any', priority=None, status='staged', card
              spawned_from=None, extra_labels=()):
     """Create a card. Workers should leave status as 'staged' so Jake approves it; only the hub and Jake
     create 'approved' cards (the guardrail rules decide which kinds skip approval)."""
+    global LAST_NEW_CARD_WAS_NEW
     if f'status:{status}' not in LABELS:
         raise ValueError(f'unknown status {status}')
     labels = [f'status:{status}', f'machine:{machine}', f'type:{card_type}'] + list(extra_labels)
@@ -401,11 +402,15 @@ def new_card(title, body='', machine='any', priority=None, status='staged', card
             return None  # "stop re-approving #N"-style cards: snooze/send_back handle loops now
         dup = similar_open_child(spawned_from, title)
         if dup:
+            LAST_NEW_CARD_WAS_NEW = False  # autotask.propose reads this so it doesn't comment on or count it
             return dup
         body = (body + f'\n\nSpawned from #{spawned_from}').strip()
     issue = api('POST', repo_path('/issues'), {'title': title, 'body': body, 'labels': labels})
+    LAST_NEW_CARD_WAS_NEW = True
     return issue['number']
 
+
+LAST_NEW_CARD_WAS_NEW = True  # False when the last new_card returned an existing similar card instead
 
 # Follow-ups about the loop itself, which snooze_until / send_back now handle. Never filed as cards.
 META_FOLLOWUP_RE = re.compile(r're-?approv|stop (re-?)?running|pause (re-?)?approval|keeps? (looping|bouncing)', re.I)
