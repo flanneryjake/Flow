@@ -636,6 +636,31 @@ def wake_snoozed(machine, exists=os.path.exists):
     return woken
 
 
+SNOOZE_LINE_RE = re.compile(r'^\s*SNOOZE_UNTIL:\s*(.+?)\s*$', re.M)
+
+
+def parse_snooze_line(text):
+    """The Worker's `SNOOZE_UNTIL: <what> | <reason> [| producer=#N]` line (the last one in `text`), as
+    {kind, value, reason, producer}, or None. <what> is card:<n>, machine:<name>, time:<ISO>, file:<path>, or a
+    bare path or file name (a Windows drive letter like C: is a path, not a kind)."""
+    found = SNOOZE_LINE_RE.findall(text or '')
+    if not found:
+        return None
+    parts = [x.strip() for x in found[-1].split('|')]
+    what, reason, producer = parts[0].strip('"`'), '', None
+    for x in parts[1:]:
+        m = re.match(r'producer\s*=\s*#?(\d+)$', x)
+        if m:
+            producer = int(m.group(1))
+        else:
+            reason = (reason + ' ' + x).strip()
+    kind, value = 'file', what
+    m = re.match(r'^(\w{2,}):(.+)$', what)
+    if m and m.group(1).lower() in SNOOZE_KINDS:
+        kind, value = m.group(1).lower(), m.group(2).strip().strip('"`')
+    return {'kind': kind, 'value': value, 'reason': reason, 'producer': producer}
+
+
 # ---------------------------------------------------------------------------- approval-loop triage
 #
 # Jake approves a card, the Worker kicks it back as "needs Jake", he approves again, it bounces again. Before
