@@ -1,4 +1,4 @@
-"""Baby Jarvis skills: the three small jobs that make Baby Jarvis the rig's assistant.
+"""Tars skills: the three small jobs that make Tars the rig's assistant.
 
   check_rig_output(text, ...)  item 5: after a rig job, check the draft (crisis line, required sections,
                                leftover placeholders, word count) and write the one-line hub notification.
@@ -7,22 +7,22 @@
   ha_intent(text, entities)    item 7: turn a spoken lights/climate request into one Home Assistant service
                                call. Locks, alarms, garage doors and covers are never produced.
 
-Every function calls Baby Jarvis (baby-jarvis:latest on the laptop's Ollama) and checks what it says; the hard
+Every function calls Tars (tars:latest on the laptop's Ollama) and checks what it says; the hard
 checks (crisis line, placeholders, sections, allowed HA services) are plain code, so a wrong model answer can't
 let a bad draft or an unsafe service call through. If the laptop is unreachable, each function still returns a
 result with "model": null (the checker falls back to code-only checks and a template notification; the router
 and HA intent return route "rig" / ok false so the caller uses its existing path).
 
-Prompts match the Baby Jarvis training rows (kit/training/baby-jarvis in jarvis-outputs), so what the model
+Prompts match the Tars training rows (kit/training/tars on the tars-kit branch of jarvis-outputs), so what the model
 sees in production is what it is being trained on.
 
 Standard library only. Config from environment variables:
-  BABY_JARVIS_URL    default http://127.0.0.1:11434 (homebase: http://laptop-4150egrs:11434)
-  BABY_JARVIS_MODEL  default baby-jarvis:latest
+  TARS_OLLAMA_URL    default http://127.0.0.1:11434 (homebase: http://laptop-4150egrs:11434)
+  TARS_MODEL         default tars:latest
 CLI:
-  python baby_skills.py check draft.md --sections "Objectives,Closing" --max-words 3000
-  python baby_skills.py route "turn off the porch light"
-  python baby_skills.py ha "set the bedroom to 68" --entities entities.json
+  python tars_skills.py check draft.md --sections "Objectives,Closing" --max-words 3000
+  python tars_skills.py route "turn off the porch light"
+  python tars_skills.py ha "set the bedroom to 68" --entities entities.json
 """
 import argparse
 import ast
@@ -34,13 +34,13 @@ import sys
 import time
 import urllib.request
 
-URL = os.environ.get('BABY_JARVIS_URL', 'http://127.0.0.1:11434').rstrip('/')
-MODEL = os.environ.get('BABY_JARVIS_MODEL', 'baby-jarvis:latest')
+URL = os.environ.get('TARS_OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
+MODEL = os.environ.get('TARS_MODEL', 'tars:latest')
 TIMEOUT = 60
 
-# Same text as BABY_SYSTEM in kit/tools/build_seed.py.
-BABY_SYSTEM = (
-    "You are Baby Jarvis, the small fast model on Jake's RTX 5060 laptop. You do short jobs fast: classify, route, "
+# Same text as TARS_SYSTEM in kit/tools/build_seed.py.
+TARS_SYSTEM = (
+    "You are Tars, the small fast model on Jake's RTX 5060 laptop. You do short jobs fast: classify, route, "
     "extract, reformat, tag, name, summarize logs, write one-line notifications, and pass/fail checks on text you are "
     "given. Same voice as big Jarvis (dry, plain, a little South End) but keep it short. You never author long "
     "documents, code beyond a one-liner, or clinical, legal or money content. If a job is bigger than you, reply with "
@@ -50,7 +50,7 @@ BABY_SYSTEM = (
 
 # ----------------------------------------------------------------------------- model call
 
-def _chat(user, schema=None, system=BABY_SYSTEM, max_tokens=400, timeout=TIMEOUT):
+def _chat(user, schema=None, system=TARS_SYSTEM, max_tokens=400, timeout=TIMEOUT):
     """Returns (text, seconds) or (None, error string)."""
     body = {'model': MODEL, 'stream': False, 'think': False,
             'options': {'temperature': 0.1, 'num_ctx': 4096, 'num_predict': max_tokens},
@@ -212,7 +212,7 @@ def include_sections(job_text):
 
 def check_rig_output(text, title='', required_sections=(), crisis_line=True, min_words=None, max_words=None,
                      warn_sections=(), job_prompt='', require_988=None, require_rig_notes=None):
-    """Hard checks in code, then Baby Jarvis writes the hub line. Returns
+    """Hard checks in code, then Tars writes the hub line. Returns
     {"pass": bool, "problems": [...], "warnings": [...], "words": n, "notify": "one line", "model": seconds|None}.
     Pass the rig job's prompt as job_prompt and it sets the rest the way homebase's Check-RigOutput does:
       * 988 is required on its own (911 alone fails) whenever the prompt mentions 988; otherwise 988 or 911.
@@ -294,7 +294,7 @@ TO_RIG = re.compile(
 
 # ----------------------------------------------------------------------------- math (front door)
 # The 9B gets arithmetic wrong ("15 percent of 80" -> "Twelve point eight"), so simple math is computed here
-# with a small AST walker (no eval) and Baby Jarvis only phrases the number. Its line is used only if it
+# with a small AST walker (no eval) and Tars only phrases the number. Its line is used only if it
 # contains the exact result; otherwise a plain template answers.
 
 _WORDS = [(r'\bmultiplied by\b|\btimes\b|\bx\b(?=\s*[\d(])', '*'), (r'\bdivided by\b|\bover\b', '/'),
@@ -401,7 +401,7 @@ def route_request(text, context=''):
     route = ans.get('route') if ans.get('route') in ('laptop', 'rig', 'claude') else None
     why, handoff = ans.get('why', ''), ans.get('handoff', '')
     if route is None:
-        return {'route': 'rig', 'why': f'Baby Jarvis unavailable ({secs}); default path.', 'handoff': t,
+        return {'route': 'rig', 'why': f'Tars unavailable ({secs}); default path.', 'handoff': t,
                 'answer': '', 'model': None}
     if route != 'claude' and TO_CLAUDE.search(t):
         route, why, handoff = 'claude', 'Needs web, accounts or an outside action.', handoff or t
@@ -411,14 +411,14 @@ def route_request(text, context=''):
         route, why, handoff = 'laptop', 'Status question, answered from the state given.', ''
     answer = ''
     if route == 'laptop':
-        # Answer in the normal Baby Jarvis voice (the Modelfile's own system prompt).
+        # Answer in the normal Tars voice (the Modelfile's own system prompt).
         a, s2 = _chat(ctx + t if ctx else t, system=None, max_tokens=250)
         answer = a or ''
         if a and (_json(a) or {}).get('route') in ('rig', 'claude'):   # it changed its mind mid-answer
             j = _json(a)
             route, why, handoff, answer = j['route'], j.get('why', why), j.get('handoff', t), ''
         if not a:
-            route, why, handoff = 'rig', 'Baby Jarvis did not answer.', t
+            route, why, handoff = 'rig', 'Tars did not answer.', t
     return {'route': route, 'why': why, 'handoff': handoff if route != 'laptop' else '', 'answer': answer,
             'model': secs}
 
@@ -462,7 +462,7 @@ def ha_intent(text, entities=None):
     out, secs = _chat(text + hint, schema=HA_SCHEMA, system=HA_SYSTEM, max_tokens=150)
     call = _json(out)
     if not call:
-        return {'ok': False, 'call': None, 'why': f'Baby Jarvis unavailable or gave no call ({secs}).', 'model': None}
+        return {'ok': False, 'call': None, 'why': f'Tars unavailable or gave no call ({secs}).', 'model': None}
     svc = str(call.get('service', ''))
     target = {k: v for k, v in (call.get('target') or {}).items() if v}
     data = call.get('data') or {}

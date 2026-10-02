@@ -1,10 +1,10 @@
-"""Runs baby_skills.py against the live Baby Jarvis and prints a score per skill. python eval_baby_skills.py"""
+"""Runs tars_skills.py against the live Tars and prints a score per skill. python eval_tars_skills.py"""
 import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import baby_skills as b  # noqa: E402
+import tars_skills as b  # noqa: E402
 
 GOOD = """# Session 4: Coping With Cravings
 ## Objectives

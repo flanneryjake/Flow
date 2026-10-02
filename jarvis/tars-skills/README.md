@@ -1,11 +1,11 @@
-# Baby Jarvis skills (rig assistant items 5-7)
+# Tars skills (rig assistant items 5-7)
 
-`baby_skills.py` is one stdlib module with the three jobs that make Baby Jarvis the rig's assistant. Each one
-calls Baby Jarvis on the laptop and then checks its answer in code, so a wrong model answer can't let a bad
+`tars_skills.py` is one stdlib module with the three jobs that make Tars the rig's assistant. Each one
+calls Tars on the laptop and then checks its answer in code, so a wrong model answer can't let a bad
 draft or an unsafe Home Assistant call through. Built and tested on LAPTOP-4150EGRS against the live model
-(`python eval_baby_skills.py`: checker 6/6, router 15/15, Home Assistant 8/8, run twice).
+(`python eval_tars_skills.py`: checker 6/6, router 15/15, Home Assistant 8/8, run twice).
 
-Set `BABY_JARVIS_URL=http://laptop-4150egrs:11434` on homebase (the default is localhost).
+Set `TARS_OLLAMA_URL=http://laptop-4150egrs:11434` on homebase (the default is localhost).
 
 | Item | Function | Returns | Wire it in |
 | --- | --- | --- | --- |
@@ -13,10 +13,10 @@ Set `BABY_JARVIS_URL=http://laptop-4150egrs:11434` on homebase (the default is l
 | 6 Front door | `route_request(text, context='')` | `route` laptop/rig/claude, `why`, `handoff`, `answer` | Hub requests go here first. laptop: send `answer` back. rig: make a rig job from `handoff`. claude: make a card (approval and PIN rules unchanged). Pass the Machine Health or queue lines as `context` so "is the rig on" is answered from real state. Web, buying, email and posting always go to claude, and long-form, code, clinical and "N words/pages" requests always go to the rig, whatever the model says. If the laptop is off, it returns rig as the default path. |
 | 7 Home Assistant | `ha_intent(text, entities=None)` | `ok`, `call` ({service, target, data}), `why` | Lights and climate only (`light.turn_on/off/toggle`, `climate.set_temperature/set_hvac_mode/turn_on/off`). Locks, alarms, doors, garage and covers are refused before the model sees them, and temperatures must be 55-85. Pass HA's real entity and area ids as `entities` so targets are checked against what exists. Only `ok: true` calls go to HA. |
 
-CLI: `python baby_skills.py check draft.md --sections "Objectives,Closing"`, `python baby_skills.py route "..."`,
-`python baby_skills.py ha "..." --entities ids.json`.
+CLI: `python tars_skills.py check draft.md --sections "Objectives,Closing"`, `python tars_skills.py route "..."`,
+`python tars_skills.py ha "..." --entities ids.json`.
 
 ## Item 8: laptop jobs for review
 The laptop's watchdog pushes `JarvisAgent\logs\laptop-jobs.jsonl` (secrets redacted) every hour to the orphan
 branch `laptop-review` of `flanneryjake/jarvis-outputs`, as `review/laptop-jobs.jsonl`. Homebase fetches that
-branch into `C:\Jarvis\training\baby-jarvis\review\`. That folder is a review queue, not training rows.
+branch into `C:\Jarvis\training\tars\review\`. That folder is a review queue, not training rows.

@@ -1,4 +1,4 @@
-# Installs the Baby Jarvis laptop Worker on LAPTOP-4150EGRS (run in a normal PowerShell window from this folder):
+# Installs the Tars laptop Worker on LAPTOP-4150EGRS (run in a normal PowerShell window from this folder):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 # Copies laptop_worker.py and laptop_watchdog.py to %USERPROFILE%\JarvisAgent and registers one scheduled task,
 # "Jarvis Baby Watchdog", that runs pythonw.exe every 5 min and at logon. pythonw has no console, so nothing
@@ -22,6 +22,6 @@ $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 3) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName 'Jarvis Baby Watchdog' -Action $action -Principal $principal -Settings $settings `
-    -Trigger @($every, $logon) -Description 'Keeps Ollama and the Baby Jarvis laptop Worker running (no window).' -Force | Out-Null
+    -Trigger @($every, $logon) -Description 'Keeps Ollama and the Tars laptop Worker running (no window).' -Force | Out-Null
 Start-ScheduledTask -TaskName 'Jarvis Baby Watchdog'
 Write-Host "Installed to $dest; task 'Jarvis Baby Watchdog' runs $pyw every 5 min." -ForegroundColor Green

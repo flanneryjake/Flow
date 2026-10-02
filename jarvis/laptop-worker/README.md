@@ -1,7 +1,7 @@
-# Baby Jarvis laptop Worker
+# Tars laptop Worker
 
 Lets the RTX 5060 laptop (LAPTOP-4150EGRS) work as the rig's assistant: it takes the small, checkable jobs off
-the Notion Tasks board and runs them on Baby Jarvis (`baby-jarvis:latest`, qwen3.5:9b on Ollama), and hands
+the Notion Tasks board and runs them on Tars (`tars:latest`, qwen3.5:9b on Ollama), and hands
 anything bigger to the rig or to Claude.
 
 ## What it picks up
@@ -9,16 +9,16 @@ Cards with **Status = Approved**, **Auto-executable** ticked, **Claimed by** emp
 the same gate the other Workers use, with this machine's name. It never takes `Any`, `rig` or `homebase` cards.
 
 ## What it does with a card
-Routing follows `kit/training/offload/offload-rules.md` (jarvis-outputs, branch `baby-jarvis-kit`).
+Routing follows `kit/training/offload/offload-rules.md` (jarvis-outputs, branch `tars-kit`).
 
 | Card | Result |
 | --- | --- |
-| Laptop-class: classify, tag, extract, reformat, triage, check, one-line summary or status | Baby Jarvis does it. The result is added to the card's page and saved to `C:\Jarvis\outputs\laptop\`, and the card goes to **Done**. |
-| Rig-class: long-form writing, code, planning, clinical content, over ~3,000 tokens in, or an answer over ~650 words | **Machine → rig**, back to Approved and unclaimed, with Baby Jarvis' handoff note on the page and in Notes. It doesn't wake the rig for one job. |
+| Laptop-class: classify, tag, extract, reformat, triage, check, one-line summary or status | Tars does it. The result is added to the card's page and saved to `C:\Jarvis\outputs\laptop\`, and the card goes to **Done**. |
+| Rig-class: long-form writing, code, planning, clinical content, over ~3,000 tokens in, or an answer over ~650 words | **Machine → rig**, back to Approved and unclaimed, with Tars' handoff note on the page and in Notes. It doesn't wake the rig for one job. |
 | Claude-class: web, accounts, buying, posting, email, other PCs, or any card with an **Approval code** (PIN) | **Machine → Any**, back to Approved and unclaimed, so a Claude Worker takes it under its own PIN rules. |
 | Fails twice in a row | Back to **Staged** with `NEEDS JAKE:` in Notes, and a `needs Jake:` line in the log that the Machine Health row shows. |
 
-Baby Jarvis only writes text. It runs no commands and has no tools, so everything it does is in the guardrails'
+Tars only writes text. It runs no commands and has no tools, so everything it does is in the guardrails'
 Free tier (local model, task cards, files in the work folders). A card asking for a PIN-tier action is passed on
 by rule before the model sees it.
 

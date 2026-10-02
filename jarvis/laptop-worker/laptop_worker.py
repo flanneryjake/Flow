@@ -1,23 +1,23 @@
-"""Baby Jarvis laptop Worker: runs laptop-class cards from the Notion Tasks board on the local model.
+"""Tars laptop Worker: runs laptop-class cards from the Notion Tasks board on the local model.
 
-Runs on LAPTOP-4150EGRS against Ollama's baby-jarvis:latest (qwen3.5:9b, 4k context). It only produces text:
+Runs on LAPTOP-4150EGRS against Ollama's tars:latest (qwen3.5:9b, 4k context). It only produces text:
 it never runs commands, installs, spends, posts or deletes, so every action it takes is in the guardrails'
 Free tier (local model, task cards, files under C:\\Jarvis\\outputs).
 
 Which cards: Status = Approved, Auto-executable ticked, Claimed by empty, Machine = laptop (the same gate the
 other Workers use, with this machine's name). Each card is routed with the offload rules
 (kit/training/offload/offload-rules.md in flanneryjake/jarvis-outputs):
-  * laptop-class (short classify / extract / reformat / triage / check / status job): Baby Jarvis does it,
+  * laptop-class (short classify / extract / reformat / triage / check / status job): Tars does it,
     the result goes on the card and in C:\\Jarvis\\outputs\\laptop, the card goes to Done.
   * rig-class (long-form, code, planning, clinical, > ~3,000 tokens in): Machine -> rig, back to Approved and
-    unclaimed, with Baby Jarvis' handoff note. It does not wake the rig for one job.
+    unclaimed, with Tars' handoff note. It does not wake the rig for one job.
   * Claude-class (web, accounts, purchases, posting, email, other PCs) or any card with an Approval code (PIN):
     Machine -> Any, back to Approved and unclaimed, so a Claude Worker picks it up under its own PIN rules.
 Two failed runs in a row put the card back to Staged with "NEEDS JAKE" in Notes, and log a "needs Jake:" line
 that the watchdog shows on the Machine Health row.
 
 Standard library only. Config from user environment variables: NOTION_TOKEN (required),
-BABY_JARVIS_MODEL (default baby-jarvis:latest), OLLAMA_URL (default http://127.0.0.1:11434).
+TARS_MODEL (default tars:latest), OLLAMA_URL (default http://127.0.0.1:11434).
 Run: pythonw laptop_worker.py            (normal, started by laptop_watchdog.py)
      python laptop_worker.py --once      (one pass, then exit)
      python laptop_worker.py --dry-run   (show what it would claim, change nothing)
@@ -40,7 +40,7 @@ import winreg
 
 MACHINE = 'laptop'
 TASKS_DB = '7c1c59e927644dfba461c88a67dbd32c'
-MODEL = os.environ.get('BABY_JARVIS_MODEL', 'baby-jarvis:latest')
+MODEL = os.environ.get('TARS_MODEL', 'tars:latest')
 OLLAMA = os.environ.get('OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
 POLL_SEC = 60
 PORT = 8791                     # 127.0.0.1 only: single-instance lock, GET /health, POST /wake
@@ -68,7 +68,7 @@ RIG_WORDS = re.compile(
     r'\b(curriculum|facilitator guide|handout|study guide|cover letter|resume|r[eé]sum[eé]|seo guide|'
     r'product (copy|description)s?|write (the |a )?(code|script|program|app)|unit tests?|refactor|research)\b', re.I)
 
-SYSTEM = """You are Baby Jarvis, the small local model on Jake's RTX 5060 laptop, working a task card from the queue.
+SYSTEM = """You are Tars, the small local model on Jake's RTX 5060 laptop, working a task card from the queue.
 You only have the text on the card: no internet, no files, no other PCs, no tools. Your answer is read by a script
 and then by Jake, so it must be a single JSON object and nothing else.
 
@@ -338,7 +338,7 @@ def handoff(page, route, why, note):
     notes = prop_text(page, 'Notes')
     new_notes = f'Laptop handoff to {"the rig" if route == "rig" else "Claude"}: {why}' + (f'\n{notes}' if notes else '')
     if note:
-        append_blocks(page['id'], f'Baby Jarvis handoff ({stamp()})', note)
+        append_blocks(page['id'], f'Tars handoff ({stamp()})', note)
     update(page['id'], {
         'Machine': {'select': {'name': target}},
         'Status': {'select': {'name': 'Approved'}},
@@ -349,7 +349,7 @@ def handoff(page, route, why, note):
 
 
 def decide(title, notes, body, pin, task_log):
-    """Rule check, then Baby Jarvis. Returns (route, why, answer-or-None) and writes the task log."""
+    """Rule check, then Tars. Returns (route, why, answer-or-None) and writes the task log."""
     route, why = pre_route(title, notes, body, pin)
     ans = None
     if route is None:
@@ -359,7 +359,7 @@ def decide(title, notes, body, pin, task_log):
         if route == 'laptop':
             result = (ans.get('result') or '').strip()
             if not result:
-                route, why = 'rig', 'Baby Jarvis returned an empty result'
+                route, why = 'rig', 'Tars returned an empty result'
             elif len(result.split()) > MAX_OUT_WORDS:
                 route, why = 'rig', f'answer ran {len(result.split())} words, too long for a laptop job'
     with open(task_log, 'w', encoding='utf-8') as f:
@@ -400,9 +400,9 @@ def run_card(page, st, dry):
         route, why, ans = decide(title, notes, body, code, task_log)
         if route == 'laptop':
             out = save_output(title, pid, ans['result'])
-            append_blocks(pid, f'Baby Jarvis result ({stamp()})', ans['result'])
+            append_blocks(pid, f'Tars result ({stamp()})', ans['result'])
             update(pid, {'Status': {'select': {'name': 'Done'}},
-                         'Agent log': {'rich_text': rt(f'{stamp()} done on Baby Jarvis in {ans["seconds"]}s. '
+                         'Agent log': {'rich_text': rt(f'{stamp()} done on Tars in {ans["seconds"]}s. '
                                                        f'Result on this page and in {out}')}})
             log(f'done "{title}" in {time.time() - started:.0f}s -> {out}')
         else:
@@ -531,7 +531,7 @@ def gh_run_card(card, st, dry):
         if route == 'laptop':
             out = save_output(title, key, ans['result'])
             g.log_run(n, MACHINE, 'done', started=started, model=MODEL,
-                      summary=f"{ans['result'].strip()}\n\n_Done on Baby Jarvis in {ans['seconds']}s; also saved to {out}._")
+                      summary=f"{ans['result'].strip()}\n\n_Done on Tars in {ans['seconds']}s; also saved to {out}._")
             log(f'done GitHub #{n} -> {out}')
         else:
             target = 'rig' if route == 'rig' else 'any'

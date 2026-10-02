@@ -2,7 +2,7 @@
 
 `POST http://100.85.255.99:8790/chat {"text": "..."}` returns `{"reply", "humor", "filed"}`. `GET /health`, `GET /history?n=20`.
 
-- Model: `jarvis-tars` (this Modelfile, built on `baby-jarvis`). Rebuild: `ollama create jarvis-tars -f Modelfile`.
+- Model: `jarvis-tars` (this Modelfile, built on `tars:v1`). Rebuild: `ollama create jarvis-tars -f Modelfile`.
 - Memory: `C:\Jarvis\tars\history.jsonl` (every turn) + `summary.json` (rolling summary of turns older than the last 20).
 - Facts: task/status/history questions read flanneryjake/jarvis-tasks (read-only) with `GITHUB_TASKS_TOKEN`.
 - Filing: "start researching X" / "tell Claude X" files a `status:inbox` card (`for:claude` for Claude asks).

@@ -1,4 +1,4 @@
-"""Keeps the Baby Jarvis laptop Worker and Ollama running. Started every 5 min by the scheduled task
+"""Keeps the Tars laptop Worker and Ollama running. Started every 5 min by the scheduled task
 "Jarvis Baby Watchdog" through pythonw.exe, so no console window ever appears.
 
 Each run:
@@ -136,7 +136,7 @@ def git(*args):
 
 def push_review(force=False):
     """Hourly: copy the laptop Worker's job log (secrets redacted) to jarvis-outputs branch laptop-review, where
-    homebase picks it up as a review queue for Baby Jarvis training. Never touches the repo's main branch."""
+    homebase picks it up as a review queue for Tars training. Never touches the repo's main branch."""
     if not os.path.exists(JOBS) or not os.path.isdir(os.path.join(REVIEW_REPO, '.git')):
         return 'skipped'
     try:

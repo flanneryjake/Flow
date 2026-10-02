@@ -4,7 +4,7 @@ POST /chat {"text": "..."}  -> {"reply": "...", "humor": 60, "filed": 123 | null
 GET  /health                -> {"ok": true, ...}
 GET  /history?n=20          -> last n turns
 
-Talks to the Ollama model "jarvis-tars" (Modelfile in this folder, built on baby-jarvis). Every turn is appended
+Talks to the Ollama model "jarvis-tars" (Modelfile in this folder, built on tars:v1). Every turn is appended
 to history.jsonl; each call feeds the last ~20 turns plus a rolling summary of everything older (summary.json).
 Task and status questions get a FACTS block read from GitHub (flanneryjake/jarvis-tasks: open cards by status and
 machine, what is being worked on, cards touched in the asked-for window, the machine health issues) plus the
@@ -110,7 +110,7 @@ def maybe_summarize():
               'At most 180 words, plain sentences.\n\nCURRENT MEMORY:\n' + (s['summary'] or '(empty)') +
               '\n\nNEW TURNS:\n' + chunk[-12000:] + '\n\nUPDATED MEMORY:')
     try:
-        new = ollama_chat([{'role': 'user', 'content': prompt}], model='baby-jarvis:latest', temperature=0.2,
+        new = ollama_chat([{'role': 'user', 'content': prompt}], model='tars:latest', temperature=0.2,
                           num_predict=400)
         write_json(SUMMARY, {'summary': new.strip(), 'upto': cut, 'at': dt.datetime.now().isoformat(timespec='seconds')})
         log(f'summary updated through turn {cut}')
