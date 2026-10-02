@@ -47,6 +47,8 @@ MODES = ('active', 'paused', 'isolated')
 STATE_MARK = '<!-- jarvis:fleet '
 STATE_RE = re.compile(r'<!-- jarvis:fleet (\{.*?\}) -->', re.S)
 BEAT_RE = re.compile(r'^<!-- jarvis:fleetbeat (\S+) (\{.*?\}) -->', re.S)
+# Each PC's Claude guard (jarvis/claude-guard) keeps its own comment on the same issue: Claude process counts.
+CLAUDE_RE = re.compile(r'^<!-- jarvis:claudewatch (\S+) (\{.*?\}) -->', re.S)
 FRESH_MIN = 6       # a heartbeat newer than this counts as "up" (tick runs every 2 min)
 STRANDED_MIN = 30   # claims held by a machine silent this long go back to the queue
 CACHE_MAX_S = 300   # may_take_cards() trusts a cached state this long when GitHub can't be reached
@@ -168,10 +170,19 @@ def set_mode(machine, mode, by='cli', reason='', hours=None):
     return entry
 
 
-def heartbeats(issue):
-    """machine -> {'at': iso, ...heartbeat fields, 'comment_id': id}"""
+def heartbeats(issue, claude=None):
+    """machine -> {'at': iso, ...heartbeat fields, 'comment_id': id}. Pass a dict as `claude` to also get each
+    machine's Claude guard line (counts, caps, over) from the same comment pages."""
     out = {}
     for c in ghq.paged(ghq.repo_path(f'/issues/{issue["number"]}/comments')):
+        if claude is not None:
+            cm = CLAUDE_RE.match(c.get('body') or '')
+            if cm:
+                try:
+                    claude[cm.group(1)] = json.loads(cm.group(2))
+                except ValueError:
+                    pass
+                continue
         m = BEAT_RE.match(c.get('body') or '')
         if m:
             beat = json.loads(m.group(2))
@@ -198,11 +209,16 @@ def snapshot():
     roles = load_roles()
     issue = fleet_issue()
     state = state_of(issue)
-    beats = heartbeats(issue) if issue else {}
+    claude = {}
+    beats = heartbeats(issue, claude) if issue else {}
     machines = {}
     for name, m in roles['machines'].items():
         b = beats.get(name) or {}
         age = _age_min(b['at']) if b.get('at') else None
+        cw = claude.get(name)
+        if cw:
+            cw_age = _age_min(cw.get('at')) if cw.get('at') else None
+            cw = dict(cw, minutes_ago=None if cw_age is None else round(cw_age, 1))
         machines[name] = {
             'label': m.get('label', name), 'mode': mode_of(state, name),
             'state': state['machines'].get(name) or {},
@@ -210,6 +226,7 @@ def snapshot():
             'up': age is not None and age < FRESH_MIN,
             'tailnet': b.get('tailnet', 'unknown'), 'ports': b.get('ports', {}),
             'applied': b.get('mode'),
+            'claude': cw,
         }
     return {'issue': issue and issue['number'], 'machines': machines,
             'roles': coverage(roles, machines), 'checked_at': ghq.now_iso()}

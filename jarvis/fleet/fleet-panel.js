@@ -53,7 +53,7 @@
         ? `<button data-act="paused" data-m="${name}">Pause</button><button class="fl-danger" data-act="isolated" data-m="${name}">Disconnect</button>`
         : `<button data-act="active" data-m="${name}">Bring back</button>`;
       h += `<div class="fl-card"><div class="fl-row">${dot(m)}<span class="fl-name">${esc(m.label)}</span>${btns}</div>
-        <div class="fl-sub">${esc(MODE_TEXT[m.mode] || m.mode)}${esc(until)}${pending} · ${m.up ? 'checked in' : 'not checking in'} ${esc(seen)} · tailnet ${esc(m.tailnet)}</div></div>`;
+        <div class="fl-sub">${esc(MODE_TEXT[m.mode] || m.mode)}${esc(until)}${pending} · ${m.up ? 'checked in' : 'not checking in'} ${esc(seen)} · tailnet ${esc(m.tailnet)}</div>${claudeLine(m.claude)}</div>`;
       if (sheet && sheet.machine === name) h += sheetHtml();
     }
     h += '<div class="fl-card"><div class="fl-name">Who covers what</div><table class="fl-roles">';
@@ -66,6 +66,17 @@
     el.innerHTML = h;
     el.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => act(b.dataset.m, b.dataset.act));
     el.querySelectorAll('button[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
+  }
+
+  // Claude guard (jarvis/claude-guard): how many Claude processes the PC is running, red when over a cap.
+  function claudeLine(c) {
+    if (!c || !c.counts) return '<div class="fl-sub">Claude: no count yet (Claude guard not installed)</div>';
+    const n = c.counts, gb = n.claude_mem_mb == null ? '' : ` · ${(n.claude_mem_mb / 1024).toFixed(1)} GB`;
+    const stale = c.minutes_ago != null && c.minutes_ago > 15 ? ` · counted ${Math.round(c.minutes_ago)} min ago` : '';
+    const txt = `Claude: ${n.sessions_total} session${n.sessions_total === 1 ? '' : 's'} (${n.rc_sessions} Remote Control, ${n.headless} -p, ${n.interactive} terminal, ${n.desktop_code} desktop)` +
+      ` · ${n.listeners} RC server${n.listeners === 1 ? '' : 's'} · desktop app ${n.desktop_instances}${gb}${stale}`;
+    const over = (c.over || []).length ? `<div class="fl-sub fl-warn">Over cap: ${esc(c.over.join(', '))}</div>` : '';
+    return `<div class="fl-sub${(c.over || []).length ? ' fl-warn' : ''}">${esc(txt)}</div>${over}`;
   }
 
   function sheetHtml() {
