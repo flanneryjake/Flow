@@ -498,6 +498,21 @@ def _parse_iso(text):
     return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
 
 
+# Windows hostnames and tailnet names -> the fleet names the Health issues use ("Health: <name>").
+HOST_ALIASES = {'laptop-4150egrs': 'laptop', '5060': 'laptop', 'desktop-vllddm4': 'rig',
+                'desktop-5ve3c77': 'homebase', 'jarvis-pi': 'pi'}
+
+
+def machine_name(name):
+    """A fleet name for a PC given as a fleet name, hostname or tailnet name (any case, with or without the
+    tailnet domain). Raises ValueError if it isn't a known PC."""
+    n = str(name).strip().lower().split('.')[0]
+    n = HOST_ALIASES.get(n, n)
+    if n not in MACHINES:
+        raise ValueError(f'unknown machine {name}')
+    return n
+
+
 def snooze_until(number, kind, value, machine, reason='', producer=None):
     """Park a card (status:snoozed) until a condition is met; never asks Jake. Returns the value watched.
 
@@ -526,9 +541,7 @@ def snooze_until(number, kind, value, machine, reason='', producer=None):
         what = f'#{value} is done'
         producer = producer or value
     elif kind == 'machine':
-        value = str(value).strip().lower()
-        if value not in MACHINES:
-            raise ValueError(f'unknown machine {value}')
+        value = machine_name(value)
         what = f'**{value}** is online'
     else:
         value = _parse_iso(value).replace(microsecond=0).isoformat()
