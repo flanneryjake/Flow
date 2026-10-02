@@ -208,7 +208,7 @@ def ready(machine, use_etag_file=None):
 
     With use_etag_file, the list is cached and re-fetched with If-None-Match, so an unchanged queue costs
     nothing against the API rate limit. Polling every 60 s is fine either way."""
-    path = repo_path('/issues?state=open&labels=status:approved&per_page=100&sort=created&direction=asc')
+    path = repo_path('/issues?state=open&labels=status:approved&sort=created&direction=asc')
     cache = {}
     if use_etag_file and os.path.exists(use_etag_file):
         try:
@@ -216,15 +216,19 @@ def ready(machine, use_etag_file=None):
                 cache = json.load(f)
         except ValueError:
             cache = {}
-    status, data, headers = request('GET', path, etag=cache.get('etag'))
-    if status == 304:
+    status, data, headers = request('GET', f'{path}&per_page=100&page=1', etag=cache.get('etag'))
+    if status == 304 and len(cache.get('data', [])) < 100:
+        # The ETag only covers page 1, so a 304 is trusted only when the whole queue fits on that page.
         data = cache.get('data', [])
-    elif use_etag_file:
-        slim = [{'number': i['number'], 'title': i['title'], 'labels': label_names(i),
-                 'created_at': i['created_at'], 'pull_request': i.get('pull_request')} for i in data]
-        with open(use_etag_file, 'w', encoding='utf-8') as f:
-            json.dump({'etag': headers.get('ETag') or headers.get('etag'), 'data': slim}, f)
-        data = slim
+    else:
+        if status == 304 or len(data or []) >= 100:
+            data = paged(path)
+        if use_etag_file:
+            slim = [{'number': i['number'], 'title': i['title'], 'labels': label_names(i),
+                     'created_at': i['created_at'], 'pull_request': i.get('pull_request')} for i in data]
+            with open(use_etag_file, 'w', encoding='utf-8') as f:
+                json.dump({'etag': headers.get('ETag') or headers.get('etag'), 'data': slim}, f)
+            data = slim
     out = []
     for i in data:
         names = label_names(i)
