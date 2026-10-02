@@ -498,9 +498,14 @@ def _parse_iso(text):
     return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
 
 
-# Windows hostnames and tailnet names -> the fleet names the Health issues use ("Health: <name>").
-HOST_ALIASES = {'laptop-4150egrs': 'laptop', '5060': 'laptop', 'desktop-vllddm4': 'rig',
-                'desktop-5ve3c77': 'homebase', 'jarvis-pi': 'pi'}
+# Windows hostnames and tailnet names -> fleet names. The 5060 claims as "homebase" since 2026-10-02; the
+# junk laptop is the backup box (Home Assistant, relay).
+HOST_ALIASES = {'laptop-4150egrs': 'homebase', '5060': 'homebase', 'laptop': 'homebase',
+                'desktop-vllddm4': 'rig', 'desktop-5ve3c77': 'backup', 'junk': 'backup', 'jarvis-pi': 'pi'}
+SNOOZE_MACHINES = MACHINES + ['backup']
+# Health issue names each fleet name may still be reporting under (the 5060's watchdog wrote "laptop" until
+# its Health identity moved to "homebase"); the freshest check-in wins.
+HEALTH_NAMES = {'homebase': ['homebase', 'laptop']}
 
 
 def machine_name(name):
@@ -508,7 +513,7 @@ def machine_name(name):
     tailnet domain). Raises ValueError if it isn't a known PC."""
     n = str(name).strip().lower().split('.')[0]
     n = HOST_ALIASES.get(n, n)
-    if n not in MACHINES:
+    if n not in SNOOZE_MACHINES:
         raise ValueError(f'unknown machine {name}')
     return n
 
@@ -602,14 +607,15 @@ def snoozed(machine=None):
 
 
 def machine_online(name, fresh_min=MACHINE_FRESH_MIN):
-    number = health_issue(name)
-    if not number:
-        return False
-    m = re.search(r'\*\*Last check-in:\*\* (\S+)', api('GET', repo_path(f'/issues/{number}')).get('body') or '')
-    if not m:
-        return False
-    age = dt.datetime.now(dt.timezone.utc) - _parse_iso(m.group(1))
-    return age.total_seconds() < fresh_min * 60
+    """True if any Health issue this PC reports under checked in within `fresh_min` minutes."""
+    for health_name in HEALTH_NAMES.get(name, [name]):
+        number = health_issue(health_name)
+        if not number:
+            continue
+        m = re.search(r'\*\*Last check-in:\*\* (\S+)', api('GET', repo_path(f'/issues/{number}')).get('body') or '')
+        if m and (dt.datetime.now(dt.timezone.utc) - _parse_iso(m.group(1))).total_seconds() < fresh_min * 60:
+            return True
+    return False
 
 
 def condition_met(s, exists=os.path.exists, closed=None):
@@ -730,7 +736,7 @@ def triage_prompt(number, reason):
     bounces = sum(1 for h in hist if h['event'] in ('needs-jake', 'run needs-jake'))
     loop = f', and it has already been sent back to him {bounces} time(s)' if bounces else ''
     lines = '\n'.join(f"- {h['at']} {h['event']}: {h['text']}" for h in hist[-12:]) or '- (none)'
-    return TRIAGE_PROMPT.format(loop=loop, machines=', '.join(MACHINES), number=number, title=issue['title'],
+    return TRIAGE_PROMPT.format(loop=loop, machines='homebase (the 5060), rig, pi, backup (the junk laptop)', number=number, title=issue['title'],
                                 body=(issue.get('body') or '').strip()[:3000], reason=reason.strip()[:1500],
                                 history=lines)
 
