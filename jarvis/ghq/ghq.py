@@ -44,7 +44,7 @@ LABELS = {
     'status:approved':   ('0e8a16', 'Approved: a Worker may run it'),
     'status:working':    ('5319e7', 'A Worker has claimed it and is running it'),
     'status:needs-jake': ('d93f0b', 'Stopped until Jake answers; Workers skip it'),
-    'status:snoozed':    ('8b572a', 'Parked on purpose; Workers skip it'),
+    'status:snoozed':    ('8b572a', 'Parked on purpose; Workers skip it (or waiting for a file, see snooze_until_file)'),
     'machine:any':       ('c5def5', 'Either PC may run it'),
     'machine:homebase':  ('0e8a16', 'Homebase only'),
     'machine:rig':       ('b60205', 'Rig only'),
@@ -72,6 +72,10 @@ RUN_MARK = '<!-- jarvis:run -->'
 PROGRESS_MARK = '<!-- jarvis:progress -->'
 CLAIM_RE = re.compile(r'^<!-- jarvis:claim (\S+) (\S+) -->')
 META_RE = re.compile(r'<!-- jarvis:meta (\{.*?\}) -->')
+SNOOZE_RE = re.compile(r'<!-- jarvis:snooze (\{.*?\}) -->')
+OUTPUT_RE = re.compile(r'^\*\*Output file \(full path\):\*\* `[^`]*`\n?(Write the finished file to exactly this path.*)?$', re.M)
+# Where a bare file name ("plate5.3mf") is put when the card that makes it never named a folder.
+OUTPUT_ROOT = os.environ.get('JARVIS_OUTPUT_ROOT', r'C:\Jarvis\outputs-repo\cards')
 
 
 class GitHubError(Exception):
@@ -296,7 +300,7 @@ def claim(number, machine):
     return True
 
 
-OUTCOMES = ('done', 'needs-jake', 'failed', 'timeout', 'waiting-usage', 'released', 'paused')
+OUTCOMES = ('done', 'needs-jake', 'failed', 'timeout', 'waiting-usage', 'released', 'paused', 'snoozed')
 
 
 def log_run(number, machine, outcome, started=None, ended=None, summary='', log_tail='', model=''):
@@ -307,6 +311,7 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
     waiting-usage  -> back to status:approved (the card is fine; the account hit its limit)
     released       -> back to status:approved (Worker let go without running, e.g. shutting down)
     paused         -> back to status:approved + `resume`, so it runs right after the `now` card that paused it
+    snoozed        -> status:snoozed (call snooze_until_file first so it knows which file wakes it)
     failed/timeout -> back to status:approved once; a second failed/timeout run in a row -> needs-jake
     """
     if outcome not in OUTCOMES:
@@ -353,6 +358,9 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
     if outcome == 'paused':
         set_status(number, 'approved', extra_add=['resume'], extra_remove=remove)
         return 'approved'
+    if outcome == 'snoozed':
+        set_status(number, 'snoozed', extra_remove=remove)
+        return 'snoozed'
     set_status(number, 'approved', extra_remove=remove)
     return 'approved'
 
@@ -393,6 +401,107 @@ def approve(number, by='hub'):
 def ask_jake(number, question):
     set_status(number, 'needs-jake', extra_remove=[f'claimed:{m}' for m in MACHINES])
     comment(number, f'**Needs Jake:** {question}')
+
+
+# ---------------------------------------------------------------------------- snooze until a file exists
+#
+# An approved card that can't start because an input file isn't there yet (another card makes it, or a print
+# hasn't finished) must not bounce back to Jake: Jake already approved it. The Worker snoozes it on the file
+# instead, and every poll `wake_snoozed()` puts it back to approved the moment the file shows up.
+
+def _is_full_path(path):
+    return bool(re.match(r'^[A-Za-z]:[\\/]', path) or path.startswith('\\\\') or path.startswith('/'))
+
+
+def parent_of(issue_or_number):
+    """The card this one was spawned from ("Spawned from #N" in the body), or None."""
+    issue = issue_or_number if isinstance(issue_or_number, dict) else api('GET', repo_path(f'/issues/{issue_or_number}'))
+    m = re.search(r'Spawned from #(\d+)', issue.get('body') or '')
+    return int(m.group(1)) if m else None
+
+
+def full_output_path(name, producer):
+    """A full path for a bare file name, in the producing card's own folder under OUTPUT_ROOT."""
+    name = re.split(r'[\\/]', name.strip().strip('"`'))[-1]
+    sep = '\\' if '\\' in OUTPUT_ROOT else '/'
+    return sep.join([OUTPUT_ROOT.rstrip('\\/'), f'card-{producer}', name])
+
+
+def set_output_path(producer, path, waiting=None):
+    """Edit the producing card's body so it writes its output to exactly `path` (replacing any earlier line)."""
+    issue = api('GET', repo_path(f'/issues/{producer}'))
+    body = OUTPUT_RE.sub('', issue.get('body') or '').rstrip()
+    line = f'**Output file (full path):** `{path}`'
+    note = f'\nWrite the finished file to exactly this path' + (f'; #{waiting} is snoozed until it exists.' if waiting else '.')
+    api('PATCH', repo_path(f'/issues/{producer}'), {'body': f'{body}\n\n{line}{note}'.strip()})
+    comment(producer, f'Output path set to `{path}`' + (f' so #{waiting} can start when it exists.' if waiting else '.'))
+    if issue.get('state') == 'closed':
+        # Already ran, but nobody knows where its file went. Reopen it (Jake approved it once already) to put
+        # the file at the full path: copy it there if it exists elsewhere, otherwise make it again.
+        api('PATCH', repo_path(f'/issues/{producer}'), {'state': 'open'})
+        set_status(producer, 'approved')
+        comment(producer, f'Reopened only to put its output at `{path}`. If the file already exists somewhere '
+                          'else, copy it there instead of redoing the work.')
+        wake()
+
+
+def snooze_until_file(number, path, machine, reason='', producer=None):
+    """Park a card (status:snoozed) until `path` exists on `machine`; never asks Jake.
+
+    If `path` is only a file name, the producing card (`producer`, else this card's parent) is edited to write
+    to a full path, and the snooze watches that path. Returns the full path watched."""
+    if not _is_full_path(path):
+        producer = producer or parent_of(number)
+        if not producer:
+            raise ValueError(f'#{number}: "{path}" is not a full path and the card has no parent to edit; '
+                             'pass a full path or producer=<card that makes the file>')
+        path = full_output_path(path, producer)
+        set_output_path(producer, path, waiting=number)
+    meta = {'path': path, 'machine': machine, 'since': now_iso(), 'producer': producer}
+    set_status(number, 'snoozed', extra_remove=[f'claimed:{m}' for m in MACHINES] + ['resume'])
+    comment(number, f'<!-- jarvis:snooze {json.dumps(meta)} -->\n**Snoozed until this file exists on {machine}:** '
+                    f'`{path}`' + (f'\n\n{reason.strip()}' if reason else '') +
+                    (f'\n\nMade by #{producer}.' if producer else '') +
+                    '\n\nIt goes back to approved by itself when the file appears. No action needed from Jake.')
+    return path
+
+
+def snooze_of(number):
+    """The latest snooze record on a card ({path, machine, since, producer}) or None."""
+    found = None
+    for c in paged(repo_path(f'/issues/{number}/comments')):
+        m = SNOOZE_RE.search(c.get('body') or '')
+        if m:
+            found = json.loads(m.group(1))
+    return found
+
+
+def snoozed(machine=None):
+    """Open snoozed cards with the file each waits on (path None = snoozed by hand). Used by the hub too."""
+    out = []
+    for i in paged(repo_path('/issues?state=open&labels=status:snoozed&per_page=100')):
+        if i.get('pull_request'):
+            continue
+        s = snooze_of(i['number']) or {}
+        if machine and s.get('machine') not in (None, machine):
+            continue
+        out.append({'number': i['number'], 'title': i['title'], 'path': s.get('path'),
+                    'machine': s.get('machine'), 'since': s.get('since'), 'producer': s.get('producer')})
+    return out
+
+
+def wake_snoozed(machine, exists=os.path.exists):
+    """Call once per poll. Any card snoozed on a file that now exists on this machine goes back to approved.
+    Cards snoozed by hand (no file) are left alone. Returns the numbers woken."""
+    woken = []
+    for s in snoozed(machine):
+        if s['path'] and s['machine'] == machine and exists(s['path']):
+            set_status(s['number'], 'approved')
+            comment(s['number'], f'`{s["path"]}` is there now: back to approved at {now_iso()}.')
+            woken.append(s['number'])
+    if woken:
+        wake()
+    return woken
 
 
 # ---------------------------------------------------------------------------- the "now" lane
@@ -553,6 +662,16 @@ def main(argv=None):
     s.add_argument('--watch', action='store_true', help='print progress until it finishes')
     s = sub.add_parser('watch', help="print a card's progress until it finishes")
     s.add_argument('number', type=int)
+    s = sub.add_parser('snooze', help='park a card until a file exists (never asks Jake)')
+    s.add_argument('number', type=int)
+    s.add_argument('path', help='full path, or a bare file name to route through the parent card')
+    s.add_argument('--machine', required=True, help='the PC where the file will appear')
+    s.add_argument('--reason', default='')
+    s.add_argument('--producer', type=int, help='card that makes the file (default: the parent card)')
+    s = sub.add_parser('snoozed', help='list snoozed cards and the file each waits on')
+    s.add_argument('--machine')
+    s = sub.add_parser('wake-snoozed', help='approve snoozed cards whose file now exists here')
+    s.add_argument('--machine', required=True)
     s = sub.add_parser('progress', help="rewrite a card's progress comment")
     s.add_argument('number', type=int)
     s.add_argument('--machine', required=True)
@@ -597,6 +716,12 @@ def main(argv=None):
                 print(f'Finished: {watch(n)}')
         elif a.cmd == 'watch':
             print(f'Finished: {watch(a.number)}')
+        elif a.cmd == 'snooze':
+            print(snooze_until_file(a.number, a.path, a.machine, a.reason, a.producer))
+        elif a.cmd == 'snoozed':
+            print(json.dumps(snoozed(a.machine), indent=1))
+        elif a.cmd == 'wake-snoozed':
+            print(json.dumps(wake_snoozed(a.machine)))
         elif a.cmd == 'progress':
             print(progress(a.number, a.machine, a.text, a.comment_id))
     except GitHubError as e:

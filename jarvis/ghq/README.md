@@ -114,6 +114,29 @@ What `agent.py` does with it:
    `ghq.progress(number, MACHINE, 'Homebase is out of Claude usage until <time>; this runs first when it resets.')`
    so the rig sees why nothing is happening.
 
+## Snooze until a file exists
+
+An approved card that is only waiting for an input file never goes back to Jake. It is snoozed on the file
+(`status:snoozed` plus a `<!-- jarvis:snooze {"path", "machine", ...} -->` comment) and comes back to approved by
+itself when the file exists. The Worker's instructions are in `jarvis/skills/snooze-until-file/SKILL.md`.
+
+What `agent.py` does with it:
+
+1. **Give Claude the skill.** Copy `jarvis\skills\snooze-until-file` into the work folder's `.claude\skills\`
+   (or add its text to the card prompt), so Claude ends a blocked run with
+   `SNOOZE_UNTIL: <full path or bare name> | <reason> [| producer=#N]` as its last line.
+2. **Handle the marker.** When the run's final text has that line, call
+   `ghq.log_run(n, MACHINE, 'snoozed', ...)` then `ghq.snooze_until_file(n, path, MACHINE, reason, producer)`
+   instead of `needs-jake`. A bare file name makes ghq edit the parent card ("Spawned from #N") to write to
+   `JARVIS_OUTPUT_ROOT\card-<parent>\<name>` (default `C:\Jarvis\outputs-repo\cards`), reopening it if it had
+   already finished. If there is no parent and no `producer`, it raises `ValueError`: fall back to `needs-jake`
+   with the error as the question.
+3. **Check every poll.** Call `ghq.wake_snoozed(MACHINE)` before `ready()`. Cards snoozed by hand (no file) are
+   never touched.
+
+The phone hub's Review/Approvals page lists `ghq.snoozed()` under "Waiting on a file", with the path, the card
+that makes it and how long it has waited, so Jake sees why the card hasn't run without being asked anything.
+
 ## Phone hub
 
 In the hub, the Approvals list reads
