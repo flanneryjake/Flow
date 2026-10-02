@@ -47,6 +47,11 @@ class Tests(unittest.TestCase):
         ev, _ = jd.card_events([issue(1, 'needs-jake')], seen2)
         self.assertEqual([(n, s) for n, s, _ in ev], [(1, 'needs-jake')])
 
+    def test_guild_allowed(self):
+        self.assertTrue(jd.guild_allowed(1, 7, {7}, set()))
+        self.assertTrue(jd.guild_allowed(1, 8, {7}, {1}))
+        self.assertFalse(jd.guild_allowed(1, 8, {7}, set()))
+
     def test_read_token_strips_prefix(self):
         os.environ['DISCORD_BOT_TOKEN'] = 'Bot abc.def '
         try:

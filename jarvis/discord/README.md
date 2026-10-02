@@ -7,12 +7,13 @@ A Discord bot on the homebase (the 5060 laptop) that lets Jake talk to Jarvis an
 | **#jarvis** (no @ needed), an @mention anywhere, or a DM | The message goes to TARS (`POST http://127.0.0.1:8790/chat`) and the reply comes back. Only the application's owner (Jake) and `DISCORD_ALLOWED_USERS` can talk to it, since TARS can file cards. |
 | **#jarvis-alerts** | Watchdog alerts (the same ones pushed to the phone), anything POSTed to `http://127.0.0.1:8796/notify` (`{"title","body","url"}`), and each card that becomes **staged** or **needs-jake** in `flanneryjake/jarvis-tasks` (checked every 2 min). Staged cards without `pin` get an **Approve** button (Jake only; same as approving in the phone app). PIN cards link to GitHub and still need the phone app. |
 
-The bot makes #jarvis and #jarvis-alerts itself when it joins a server.
+The bot makes #jarvis and #jarvis-alerts itself when it joins a server. It leaves any server Jake doesn't own
+(unless its id is in `DISCORD_ALLOWED_GUILDS`), since the bot is public and anyone with the link could add it.
 
 ## Setup
 
 1. Invite link (one click; permissions: View Channels, Send Messages, Embed Links, Read Message History, Manage Channels):
-   `https://discord.com/oauth2/authorize?client_id=<application id>&scope=bot%20applications.commands&permissions=85008`
+   `https://discord.com/oauth2/authorize?client_id=1555659760454475856&scope=bot%20applications.commands&permissions=85008`
 2. On the homebase, `install-discord.ps1` (header of the file) saves the bot, installs `discord.py` for the user,
    takes the token from `C:\Jarvis\secrets\discord-bot.txt` (or from the rig over `tailscale file`), and registers
    the **Jarvis Discord** task (at logon, re-started every 5 min if it died). No admin needed.

@@ -34,6 +34,7 @@ CHAT_CHANNEL = os.environ.get('DISCORD_CHAT_CHANNEL', 'jarvis')
 ALERT_CHANNEL = os.environ.get('DISCORD_ALERT_CHANNEL', 'jarvis-alerts')
 REPO = os.environ.get('JARVIS_TASKS_REPO', 'flanneryjake/jarvis-tasks')
 CARD_POLL = int(os.environ.get('DISCORD_CARD_POLL', '120'))
+ALLOWED_GUILDS = {int(x) for x in os.environ.get('DISCORD_ALLOWED_GUILDS', '').replace(';', ',').split(',') if x.strip().isdigit()}
 STATE_FILE = os.path.join(HOME, 'state.json')
 MAX_LEN = 1900  # Discord's limit is 2000 characters per message
 
@@ -79,6 +80,10 @@ def should_answer(is_dm, mentioned, channel_name, author_allowed, is_bot):
     if is_bot or not author_allowed:
         return False
     return is_dm or mentioned or (channel_name or '').lower() == CHAT_CHANNEL
+
+
+def guild_allowed(guild_id, guild_owner_id, owner_ids, allowed_guilds):
+    return guild_owner_id in owner_ids or guild_id in allowed_guilds
 
 
 def card_events(issues, seen):
@@ -205,11 +210,25 @@ class JarvisBot(discord.Client):
 
     async def on_ready(self):
         log.info('Logged in as %s in %d server(s)', self.user, len(self.guilds))
-        for g in self.guilds:
-            await self.ensure_channels(g)
+        for g in list(self.guilds):
+            if await self.keep_guild(g):
+                await self.ensure_channels(g)
 
     async def on_guild_join(self, guild):
-        await self.ensure_channels(guild)
+        if await self.keep_guild(guild):
+            await self.ensure_channels(guild)
+
+    async def keep_guild(self, guild):
+        """The bot is public in the Developer Portal, so anyone with the invite link could add it. It stays only in
+        servers Jake owns (or DISCORD_ALLOWED_GUILDS), so card titles and alerts never land in someone else's server."""
+        if guild_allowed(guild.id, guild.owner_id, self.owner_ids, ALLOWED_GUILDS):
+            return True
+        log.warning('Leaving server %s (%s): not owned by Jake', guild.name, guild.id)
+        try:
+            await guild.leave()
+        except discord.HTTPException:
+            pass
+        return False
 
     async def ensure_channels(self, guild):
         for name, topic in ((CHAT_CHANNEL, 'Talk to Jarvis here (no @ needed).'),
@@ -222,7 +241,8 @@ class JarvisBot(discord.Client):
                     log.warning('No permission to create #%s in %s', name, guild.name)
 
     def alert_channels(self):
-        return [c for g in self.guilds for c in g.text_channels if c.name == ALERT_CHANNEL]
+        return [c for g in self.guilds if guild_allowed(g.id, g.owner_id, self.owner_ids, ALLOWED_GUILDS)
+                for c in g.text_channels if c.name == ALERT_CHANNEL]
 
     async def send_alert(self, content=None, embed=None, view=None):
         sent = 0
