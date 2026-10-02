@@ -99,3 +99,13 @@ every run, even with `-WindowStyle Hidden`. `hide-task-windows.ps1` rewrites eve
 through `wscript.exe` and a small `.vbs` in `C:\Jarvis\hidden\` that runs the same command with no window and waits
 for it. Remote Control is left alone. Originals are saved in `C:\Jarvis\hidden\original-actions.json`; to undo, set
 `$env:JARVIS_UNHIDE='1'` and run it again. Re-run it after re-running the installer or adding a Jarvis task.
+
+## Keep awake on AC (the laptop)
+
+The 5060 laptop is a Modern Standby PC: when it "sleeps" (idle sleep timer, power button, lid, or a program turning
+the screen off with `SC_MONITORPOWER`) Windows pauses every desktop program, so Remote Control, the Worker and the
+health check-in all go silent and the PC drops off the tailnet. `power/install-keep-awake.ps1` sets every power plan
+to never sleep or hibernate on AC with the lid doing nothing, lets Windows' own idle timer turn the screen off after
+5 minutes (that keeps everything running), and registers "Jarvis Keep Awake", which blocks idle sleep and puts those
+settings back if a vendor tool switches plans (`C:\Jarvis\power\keep-awake.log`). No admin needed. On a Modern
+Standby PC, don't use `display-off`'s monitor-off message; the idle screen timer does the same job safely.
