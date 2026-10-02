@@ -567,6 +567,18 @@ def snooze_until(number, kind, value, machine, reason='', producer=None):
         producer = producer or value
     elif kind == 'machine':
         value = machine_name(value)
+        if value in MACHINES:
+            # "Run this on the rig" means the card belongs to that PC: move it there, or the snoozing Worker
+            # (machine:any) claims it again the moment it wakes. If that PC is already up, nothing to wait for.
+            issue = api('GET', repo_path(f'/issues/{number}'))
+            keep = [n for n in label_names(issue) if not n.startswith(('machine:', 'claimed:'))]
+            if machine_online(value):
+                keep = [n for n in keep if not n.startswith('status:')] + ['status:approved', f'machine:{value}']
+                api('PUT', repo_path(f'/issues/{number}/labels'), {'labels': keep})
+                comment(number, f'Moved to **{value}**, which is online now.' + (f'\n\n{reason.strip()}' if reason else ''))
+                wake()
+                return value
+            api('PUT', repo_path(f'/issues/{number}/labels'), {'labels': keep + [f'machine:{value}']})
         what = f'**{value}** is online'
     else:
         value = _parse_iso(value).replace(microsecond=0).isoformat()
