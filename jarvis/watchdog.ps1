@@ -41,13 +41,29 @@ function Invoke-GH([string]$method, [string]$path, $body) {
     Invoke-RestMethod @a
 }
 # This machine's (and on homebase, the rig's) "Health: <machine>" issue, label health.
+# The list is piped through ForEach-Object because Windows PowerShell 5.1 hands a JSON array back as ONE object,
+# which @() alone doesn't unroll. $healthRead stays false when the lookup fails, so a 403 (rate limit) or a timeout
+# never makes this run file a second "Health: <machine>" issue (that's how the 5060 got #555 and #556 on 10/02).
 $healthIssues = @()
+$healthRead = $false
 if ($ghTok) {
-    try { $healthIssues = @(Invoke-GH Get 'issues?state=open&labels=health&per_page=100') }
+    try { $healthIssues = @(Invoke-GH Get 'issues?state=open&labels=health&per_page=100' | ForEach-Object { $_ }); $healthRead = $true }
     catch { Log "Reading the health issues failed: $(Redact $_.Exception.Message)" }
 }
-function Get-HealthIssue([string]$m) { $healthIssues | Where-Object { "$($_.title)" -match "^Health: $m(\s|$)" } | Select-Object -First 1 }
+function Get-HealthIssue([string]$m) { $healthIssues | Where-Object { "$($_.title)" -match "^Health: $m(\s|$)" } | Sort-Object number | Select-Object -First 1 }
 $myHealth = Get-HealthIssue $machine
+# Remember our issue number so later runs keep writing the same one even if the list lookup fails.
+$healthIdFile = Join-Path $PSScriptRoot 'health-issue.txt'
+if (-not $myHealth -and $ghTok -and (Test-Path $healthIdFile)) {
+    $savedId = "$(Get-Content $healthIdFile -TotalCount 1)".Trim()
+    if ($savedId -match '^\d+$') {
+        try {
+            $i = Invoke-GH Get "issues/$savedId"
+            if ($i.state -eq 'open' -and "$($i.title)" -match "^Health: $machine(\s|$)") { $myHealth = $i }
+            $healthRead = $true
+        } catch { Log "Reading health issue #$savedId failed: $(Redact $_.Exception.Message)" }
+    }
+}
 
 # Remote kick: adding the label "restart-rc" to this machine's health issue (by Jake from the GitHub app, or by a
 # cloud Claude session) makes this run restart Remote Control even if its process looks alive, e.g. when it is
@@ -234,7 +250,12 @@ if ($rcState -eq 'Down' -and (Test-Path $rcDebug)) {
 }
 
 # --- 2. Listening ports ---------------------------------------------------------------
-$ports = if ($machine -in 'rig', 'laptop') { @{ 'ollama' = 11434 } } else { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790 } }
+$ports = switch ($machine) {
+    'rig'    { @{ 'ollama' = 11434 } }
+    'laptop' { @{ 'ollama' = 11434 } }
+    'backup' { @{ 'home assistant' = 8123; 'mqtt' = 1883; 'wake relay' = 8767 } }
+    default  { @{ 'hub v2' = 8765; 'hub v3' = 8770; 'agent' = 8790; 'ollama' = 11434 } }
+}
 $portStatus = foreach ($k in $ports.Keys) {
     $up = Get-NetTCPConnection -State Listen -LocalPort $ports[$k] -ErrorAction SilentlyContinue
     "$k :$($ports[$k]) " + $(if ($up) { 'up' } else { 'DOWN' })
@@ -370,29 +391,45 @@ if (-not $ghTok) {
     $alerts.Add('GITHUB_TASKS_TOKEN is not set; waiting cards unknown and health not reported')
 } else {
     try {
+        # Only open approved cards are needed for the count (state=all paged up to 10 calls every run, which
+        # mattered once the shared token started hitting GitHub's hourly limit).
         $issues = @(); $page = 1
         do {
-            $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=all&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30)
+            $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=open&labels=status:approved&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30 | ForEach-Object { $_ })
             $issues += $batch; $page++
         } while ($batch.Count -eq 100 -and $page -le 10)
         $issues = @($issues | Where-Object { -not $_.pull_request })
         $ghReady = @($issues | Where-Object {
             $n = @($_.labels | ForEach-Object { $_.name })
-            $_.state -eq 'open' -and $n -contains 'status:approved' -and -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
+            -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
                 ($n -contains 'machine:any' -or $n -contains "machine:$machine" -or -not @($n | Where-Object { $_ -like 'machine:*' }))
         })
         $waiting = $ghReady.Count
         $waitingNames = @($ghReady | ForEach-Object { "#$($_.number) $($_.title)" })
 
-        # Newest claim by this machine, and whether a run was logged after it.
-        $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30)
-        $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+        # Newest claim by this machine, and whether a run was logged after it. Look on the cards this machine
+        # holds right now first (label claimed:<machine>); the repo-wide newest-100 comments are only a fallback,
+        # because follow-up comments from all PCs push claims out of that window within minutes.
+        $claimC = $null; $cm = @(); $claimIssue = $null
+        $held = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=open&labels=claimed:$machine&sort=updated&direction=desc&per_page=5" -Headers $ghHdr -TimeoutSec 30 | ForEach-Object { $_ })
+        if ($held.Count) {
+            $claimIssue = $held[0]
+            $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/$($claimIssue.number)/comments?per_page=100" -Headers $ghHdr -TimeoutSec 30 | ForEach-Object { $_ })
+            [array]::Reverse($cm)
+            $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+        }
+        if (-not $claimC) {
+            $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30 | ForEach-Object { $_ })
+            $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+            $claimIssue = $null
+        }
         if ($claimC) {
             $t = ([datetime]$claimC.created_at).ToLocalTime()
             if (-not $lastClaim -or $t -gt $lastClaim) {
                 $lastClaim  = $t
                 $num        = [int](($claimC.issue_url -split '/')[-1])
-                $lastTitle  = "#$num " + "$(($issues | Where-Object { $_.number -eq $num } | Select-Object -First 1).title)"
+                $titleSrc   = if ($claimIssue) { $claimIssue } else { $issues | Where-Object { $_.number -eq $num } | Select-Object -First 1 }
+                $lastTitle  = "#$num " + "$($titleSrc.title)"
                 $claimLogAt = $null
                 $runC = $cm | Where-Object { $_.issue_url -eq $claimC.issue_url -and "$($_.body)" -match "jarvis:runmeta \{[^}]*`"machine`": `"$machine`"" } | Select-Object -First 1
                 if ($runC) { $claimLogAt = ([datetime]$runC.created_at).ToLocalTime() }
@@ -485,15 +522,22 @@ if ($DryRun) {
     $update | ConvertTo-Json -Depth 5
 } elseif ($ghTok) {
     try {
-        if ($myHealth) { Invoke-GH Patch "issues/$($myHealth.number)" $update | Out-Null }
-        else { Invoke-GH Post 'issues' $update | Out-Null }
+        if ($myHealth) {
+            Invoke-GH Patch "issues/$($myHealth.number)" $update | Out-Null
+            Set-Content -Path $healthIdFile -Value $myHealth.number -Encoding ASCII
+        } elseif ($healthRead) {
+            $created = Invoke-GH Post 'issues' $update
+            if ($created.number) { Set-Content -Path $healthIdFile -Value $created.number -Encoding ASCII }
+        } else {
+            Log 'Health issue lookup failed this run; not creating a new one.'
+        }
     } catch { Log "GitHub health update failed: $(Redact $_.Exception.Message)" }
 } else {
     Log 'No GITHUB_TASKS_TOKEN; health issue not updated.'
 }
 $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding UTF8
 
-# --- 7. Phone alerts (homebase only; it reads both rows) -------------------------------
+# --- 7. Phone alerts (homebase only; it reads every row) -------------------------------
 # Pushes through the hub's /api/notify (web push to Jake's phone) when a row's alert changes to something new,
 # and when the rig has been quiet for 30+ min while it has approved cards waiting (a sleeping idle rig is normal).
 # "Remote Control restarted" alone is not pushed: the watchdog already fixed it.
@@ -519,16 +563,25 @@ if ($machine -eq 'homebase' -and $ghTok -and -not $DryRun) {
     $prev = Get-Content $pushPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
     if ($prev) { $prev.PSObject.Properties | ForEach-Object { $pushed[$_.Name] = "$($_.Value)" } }
     $current = @{ homebase = ($alerts -join '; ') }
-    try {
-        $rb = "$((Get-HealthIssue 'rig').body)"
-        $rigAlert = if ($rb -match '(?m)^> (?!\[!WARNING\])(.+)$') { $Matches[1].Trim() } else { '' }
-        $rigSeen  = if ($rb -match '\*\*Last check-in:\*\* (\S+)') { $Matches[1] } else { $null }
-        $rigWait  = if ($rb -match '(?m)^\| Waiting cards \| (\d+) \|') { [int]$Matches[1] } else { 0 }
-        if ($rigSeen -and ($now - [datetime]$rigSeen).TotalMinutes -gt 30 -and $rigWait -gt 0) {
-            $rigAlert = "Offline since $(([datetime]$rigSeen).ToString('MM/dd HH:mm')) with $rigWait cards waiting"
-        }
-        $current['rig'] = $rigAlert
-    } catch { Log "Reading the rig health issue failed: $($_.Exception.Message)" }
+    # The other machines can't push (only homebase runs the hub), so homebase reads their rows and pushes for them.
+    foreach ($other in 'rig', 'backup') {
+        try {
+            $rb = "$((Get-HealthIssue $other).body)"
+            if (-not $rb) { continue }
+            $oAlert = if ($rb -match '(?m)^> (?!\[!WARNING\])(.+)$') { $Matches[1].Trim() } else { '' }
+            $oSeen  = if ($rb -match '\*\*Last check-in:\*\* (\S+)') { $Matches[1] } else { $null }
+            $oWait  = if ($rb -match '(?m)^\| Waiting cards \| (\d+) \|') { [int]$Matches[1] } else { 0 }
+            $quiet  = $oSeen -and ($now - [datetime]$oSeen).TotalMinutes -gt 30
+            if ($other -eq 'rig' -and $quiet -and $oWait -gt 0) {
+                # a sleeping rig is normal; only a quiet rig with work waiting is worth a push
+                $oAlert = "Offline since $(([datetime]$oSeen).ToString('MM/dd HH:mm')) with $oWait cards waiting"
+            } elseif ($other -eq 'backup' -and $quiet) {
+                # the backup runs Home Assistant, MQTT and the rig wake relay; it should never go quiet
+                $oAlert = "Offline since $(([datetime]$oSeen).ToString('MM/dd HH:mm')) (Home Assistant, alarms and rig wake)"
+            }
+            $current[$other] = $oAlert
+        } catch { Log "Reading the $other health issue failed: $($_.Exception.Message)" }
+    }
     foreach ($m in @($current.Keys)) {
         $a = "$($current[$m])"
         $worth = ($a -split '; ' | Where-Object { $_ -and $_ -ne 'Remote Control restarted' })

@@ -81,6 +81,19 @@ python helper\gemini_helper.py research "free OCR libraries for Python"
   to the model's own knowledge and marks unsure items as unverified; check links before relying on them.
 - The free tier may use what you send for training, so don't send private documents.
 
+## Guardrails (what Jarvis may do without asking)
+
+`guardrails/GUARDRAILS.md` is the policy: four tiers (Free, Free + logged, Ask once, PIN) plus hard stops that nothing
+unlocks. `guardrails/policy.json` is the same thing for the approval hook and the Worker to read.
+
+Training data is in the Free + logged tier: Claude adds it through `guardrails/training_intake.py`, which copies files
+into `C:\Jarvis\training\<topic>\`, logs source and checksum to `_log\intake.jsonl`, refuses batches with secrets or
+patient identifiers, and can revert any batch. Install on homebase with:
+
+```powershell
+$t=[Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN','User'); irm -Headers @{Authorization="Bearer $t"; Accept='application/vnd.github.raw'} 'https://api.github.com/repos/flanneryjake/Flow/contents/jarvis/guardrails/install.ps1?ref=claude/eager-knuth-lakcxt' | iex
+```
+
 ## Heavy jobs and Remote Control drops
 
 A big job on homebase (docker pulls in WSL, a model run) can starve Remote Control of memory, CPU or network, and the

@@ -36,7 +36,9 @@ import uuid
 
 API = 'https://api.github.com'
 REPO = os.environ.get('JARVIS_TASKS_REPO', 'flanneryjake/jarvis-tasks')
-MACHINES = ['homebase', 'rig', 'laptop', 'pi']
+# homebase = the 5060 since 10/02; backup = the old junk laptop. 'laptop' stays as the card lane for the
+# 5060's local-model Worker (TARS).
+MACHINES = ['homebase', 'rig', 'laptop', 'backup', 'pi']
 
 # name -> (color, description). Exactly one status:* label per open card; a closed issue is Done.
 LABELS = {

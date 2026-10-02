@@ -1,17 +1,19 @@
 {
-  "_about": "Who does what, in failover order. The first machine in a list that is active and checked in is the one serving that role; the next one takes over when it is disconnected or goes quiet. Edit this file to change the order, then re-run install-fleet.ps1 (or copy it to C:\\Jarvis\\fleet\\).",
+  "_about": "Who does what, in failover order. The first machine in a list that is active and checked in is the one serving that role; the next one takes over when it is disconnected or goes quiet. Edit this file to change the order, then re-run install-fleet.ps1 (or copy it to C:\\Jarvis\\fleet\\). Names match C:\\Jarvis\\watchdog\\machine.txt and the Workers' claimed:<name> labels.",
   "machines": {
-    "homebase": {"host": "desktop-5ve3c77", "computer": "DESKTOP-5VE3C77", "label": "Homebase"},
+    "homebase": {"host": "laptop-4150egrs", "computer": "LAPTOP-4150EGRS", "label": "5060 laptop (main homebase)"},
     "rig":      {"host": "desktop-vllddm4", "computer": "DESKTOP-VLLDDM4", "label": "Rig"},
-    "laptop":   {"host": "laptop-4150egrs", "computer": "LAPTOP-4150EGRS", "label": "5060 laptop"}
+    "backup":   {"host": "desktop-5ve3c77", "computer": "DESKTOP-5VE3C77", "label": "Junk laptop (backup: Home Assistant, wake relay)"}
   },
   "roles": {
-    "hub":       {"label": "Phone app + approvals", "order": ["homebase", "laptop"], "port": 8770,
-                  "note": "The laptop only covers this once a standby hub is installed there."},
-    "worker":    {"label": "Claude Worker (task cards)", "order": ["homebase", "rig", "laptop"],
-                  "note": "machine:any cards go to whichever Worker is active; cards pinned to one machine wait for it."},
-    "local-llm": {"label": "Local model (Ollama)", "order": ["rig", "laptop"], "port": 11434},
+    "hub":       {"label": "Phone app + approvals", "order": ["homebase", "backup"], "port": 8770,
+                  "note": "The hub moved to the 5060 on 10/02. The junk laptop's copy is disabled, so it only serves if someone turns it back on."},
+    "worker":    {"label": "Claude Worker (task cards)", "order": ["homebase", "rig"],
+                  "note": "The junk laptop's Worker is off for good (running it next to the 5060's would double-claim cards). machine:any cards go to whichever Worker is active; cards pinned to one machine wait for it."},
+    "local-llm": {"label": "Local model (Ollama)", "order": ["rig", "homebase"], "port": 11434},
     "printer":   {"label": "3D printer control", "order": ["homebase"],
-                  "note": "Tied to homebase; no standby."}
+                  "note": "The print service moved to the 5060 with the hub; no standby."},
+    "home":      {"label": "Home Assistant, MQTT, Alexa, rig wake relay", "order": ["backup"], "port": 8123,
+                  "note": "Stays on the junk laptop (the rig's network cable is plugged into it)."}
   }
 }

@@ -27,9 +27,9 @@ function Say([string]$m, [string]$c = 'Cyan') { Write-Host $m -ForegroundColor $
 
 $machine = (Get-Content 'C:\Jarvis\watchdog\machine.txt' -ErrorAction SilentlyContinue | Select-Object -First 1)
 if (-not $machine) {
-    $machine = switch ($env:COMPUTERNAME.ToUpper()) { 'DESKTOP-5VE3C77' { 'homebase' } 'DESKTOP-VLLDDM4' { 'rig' } 'LAPTOP-4150EGRS' { 'laptop' } default { '' } }
+    $machine = switch ($env:COMPUTERNAME.ToUpper()) { 'LAPTOP-4150EGRS' { 'homebase' } 'DESKTOP-VLLDDM4' { 'rig' } 'DESKTOP-5VE3C77' { 'backup' } default { '' } }
 }
-if (-not $machine) { $machine = (Read-Host "Is this 'homebase', 'rig' or 'laptop'?").Trim().ToLower() }
+if (-not $machine) { $machine = (Read-Host "Is this 'homebase', 'rig' or 'backup'?").Trim().ToLower() }
 $machine = "$machine".Trim()
 
 $py = Get-Command python, py -ErrorAction SilentlyContinue | Select-Object -First 1

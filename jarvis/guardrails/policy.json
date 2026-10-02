@@ -1,0 +1,43 @@
+{
+  "version": "2026-09-30",
+  "doc": "Machine-readable copy of GUARDRAILS.md. Tiers: free, free_logged, ask_once, pin. Stricter tier wins; unlisted actions are ask_once.",
+  "default_tier": "ask_once",
+  "work_dirs": [
+    "C:\\Jarvis\\jobs",
+    "C:\\Jarvis\\outputs",
+    "C:\\Jarvis\\reports",
+    "C:\\Jarvis\\work",
+    "%USERPROFILE%\\Desktop\\Claude"
+  ],
+  "training_dir": "C:\\Jarvis\\training",
+  "remembered_file": "C:\\Jarvis\\guardrails\\remembered.json",
+  "rules": [
+    {"kind": "read-files",          "tier": "free",        "match": "read anywhere in work_dirs, training_dir, the Flow repo, project shared files"},
+    {"kind": "write-work-dirs",     "tier": "free",        "match": "create or edit files inside work_dirs"},
+    {"kind": "local-model",         "tier": "free",        "match": "calls to the rig's Ollama models"},
+    {"kind": "gemini-helper",       "tier": "free",        "match": "gemini_helper.py research|proofread on non-private, non-clinical text"},
+    {"kind": "web-read",            "tier": "free",        "match": "web search and reading public pages"},
+    {"kind": "task-cards",          "tier": "free",        "match": "update task card/issue state and logs, create follow-up cards"},
+    {"kind": "restart-jarvis",      "tier": "free",        "match": "restart Worker, Remote Control, watchdog, hub processes"},
+    {"kind": "training-data",       "tier": "free_logged", "match": "any write under training_dir via training_intake.py", "log": "C:\\Jarvis\\training\\_log\\intake.jsonl"},
+    {"kind": "model-rebuild",       "tier": "free_logged", "match": "ollama create jarvis-fc*; keep previous build under a dated tag"},
+    {"kind": "git-claude-branch",   "tier": "free_logged", "match": "push to claude/* branches of flanneryjake/Flow, open PRs"},
+    {"kind": "delete-own-files",    "tier": "free_logged", "match": "delete files Jarvis created in work_dirs or training_dir, backup written first"},
+    {"kind": "scheduled-task",      "tier": "ask_once",    "match": "create/change scheduled tasks, startup entries, services"},
+    {"kind": "install-software",    "tier": "ask_once",    "match": "pip/npm/winget/choco installs, running downloaded code"},
+    {"kind": "system-settings",     "tier": "ask_once",    "match": "network, firewall, Tailscale, power, Windows settings"},
+    {"kind": "edit-outside",        "tier": "ask_once",    "match": "edit files outside work_dirs and training_dir"},
+    {"kind": "spend-money",         "tier": "pin",         "match": "purchases, subscriptions, paid API tiers, orders"},
+    {"kind": "post-external",       "tier": "pin",         "match": "email, social posts, publishing products, messaging people outside the project"},
+    {"kind": "delete-other",        "tier": "pin",         "match": "delete files Jarvis did not create, >20 files at once, or without backup"},
+    {"kind": "credentials",         "tier": "pin",         "match": "keys, tokens, passwords, account and security settings"},
+    {"kind": "merge-main",          "tier": "pin",         "match": "merge into main of any repository"},
+    {"kind": "edit-guardrails",     "tier": "pin",         "match": "change GUARDRAILS.md, policy.json or the approval hook"}
+  ],
+  "hard_stops": [
+    "clinical content to Gemini or any outside service",
+    "patient/client identifying information in training data",
+    "secrets in training data or logs",
+    "whole copyrighted books or paywalled articles copied verbatim"
+  ]
+}
