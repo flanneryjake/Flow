@@ -548,7 +548,8 @@ def main(argv=None):
     s = sub.add_parser('now', help="Jake's task for right now: pauses the Worker's current card")
     s.add_argument('title')
     s.add_argument('--body', default='')
-    s.add_argument('--machine', default='homebase', choices=['any'] + MACHINES)
+    s.add_argument('--machine', default=os.environ.get('JARVIS_NOW_MACHINE', 'homebase'), choices=['any'] + MACHINES,
+                   help='default: JARVIS_NOW_MACHINE, else homebase')
     s.add_argument('--watch', action='store_true', help='print progress until it finishes')
     s = sub.add_parser('watch', help="print a card's progress until it finishes")
     s.add_argument('number', type=int)

@@ -86,8 +86,10 @@ python C:\Jarvis\ghq\ghq.py now "Print plate 5" --machine homebase --watch
 
 That files an approved card labelled `now` + `p0` (Jake typed it, so it needs no second approval; the guardrails
 still apply to what the run may do), POSTs `/wake` to every URL in `JARVIS_WAKE_URLS`, and with `--watch` prints
-the card's progress until it finishes. The rig needs `JARVIS_WAKE_URLS=http://100.90.201.22:8790/wake` (or
-homebase's tailnet name) as a user environment variable, alongside its `GITHUB_TASKS_TOKEN`.
+the card's progress until it finishes. The rig needs `JARVIS_WAKE_URLS` pointing at the `/wake` URL of whichever
+PC runs the homebase Worker (the 5060, LAPTOP-4150EGRS at 100.85.255.99, since 2026-10-02; the junk laptop
+before that), alongside its `GITHUB_TASKS_TOKEN`. If that PC's Worker claims cards under another machine name
+(for example `laptop`), set `JARVIS_NOW_MACHINE` to that name on the rig so `now` cards are labelled for it.
 
 What `agent.py` does with it:
 

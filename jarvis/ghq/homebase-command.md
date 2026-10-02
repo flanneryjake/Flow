@@ -6,7 +6,7 @@ Jake wants homebase to do this right now: $ARGUMENTS
 
 1. Turn it into a short imperative title (under 80 characters) and a body with the concrete steps and a clear
    finish line. Keep Jake's own words in the body.
-2. Run: `python C:\Jarvis\ghq\ghq.py now "<title>" --body "<body>" --machine homebase`
+2. Run: `python C:\Jarvis\ghq\ghq.py now "<title>" --body "<body>"`
    It prints the card number and link. Tell Jake the link in one line.
 3. Run `python C:\Jarvis\ghq\ghq.py watch <number>` in the background and relay each new progress block to Jake
    as it arrives, in one or two lines each. When it prints `Finished:`, give Jake the result.
