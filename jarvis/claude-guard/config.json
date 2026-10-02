@@ -1,0 +1,18 @@
+{
+  "_about": "Caps for the Claude guard (claude-guard.ps1). A count above its cap pushes to Jake's phone and comments on this PC's Health issue. 'machines' overrides the caps for one PC (homebase = the 5060, rig, backup = junk laptop). headless_max_minutes: a claude -p run older than this is stopped (the Worker's own limit is 45 min).",
+  "caps": {
+    "listeners": 1,
+    "rc_sessions": 4,
+    "headless": 2,
+    "desktop_code": 3,
+    "interactive": 2,
+    "sessions_total": 8,
+    "desktop_instances": 1,
+    "claude_mem_pct": 35
+  },
+  "headless_max_minutes": 75,
+  "machines": {
+    "homebase": { "sessions_total": 6 },
+    "backup": { "rc_sessions": 2, "sessions_total": 4 }
+  }
+}
