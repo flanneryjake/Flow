@@ -222,7 +222,10 @@ def ready(machine, use_etag_file=None):
     nothing against the API rate limit. Polling every 60 s is fine either way."""
     if not fleet_allows(machine):
         return []  # paused or disconnected from the phone app's Fleet panel (fleet/fleet.py)
-    path = repo_path('/issues?state=open&labels=status:approved&per_page=100&sort=created&direction=asc')
+    # Newest-updated first, so any change to the approved set (a new approval, a claim, an edit) changes page 1.
+    # Page 1 goes out with If-None-Match: an unchanged queue is a 304, which GitHub doesn't count against the
+    # rate limit, however many approved cards there are. Only a changed page 1 pays for the remaining pages.
+    path = repo_path('/issues?state=open&labels=status:approved&sort=updated&direction=desc')
     cache = {}
     if use_etag_file and os.path.exists(use_etag_file):
         try:
@@ -230,15 +233,19 @@ def ready(machine, use_etag_file=None):
                 cache = json.load(f)
         except ValueError:
             cache = {}
-    status, data, headers = request('GET', path, etag=cache.get('etag'))
-    if status == 304:
-        data = cache.get('data', [])
-    elif use_etag_file:
-        slim = [{'number': i['number'], 'title': i['title'], 'labels': label_names(i),
+    status, data, headers = request('GET', path + '&per_page=100&page=1', etag=cache.get('etag'))
+    if status == 304 and 'data' in cache:
+        data = cache['data']
+    else:
+        data, page = list(data or []), 1
+        while len(data) == 100 * page:
+            page += 1
+            data += request('GET', path + f'&per_page=100&page={page}')[1] or []
+        data = [{'number': i['number'], 'title': i['title'], 'labels': label_names(i),
                  'created_at': i['created_at'], 'pull_request': i.get('pull_request')} for i in data]
-        with open(use_etag_file, 'w', encoding='utf-8') as f:
-            json.dump({'etag': headers.get('ETag') or headers.get('etag'), 'data': slim}, f)
-        data = slim
+        if use_etag_file:
+            with open(use_etag_file, 'w', encoding='utf-8') as f:
+                json.dump({'etag': headers.get('ETag') or headers.get('etag'), 'data': data}, f)
     out = []
     for i in data:
         names = label_names(i)
@@ -282,6 +289,10 @@ def claim(number, machine):
 
     Two Workers can race for a machine:any card, so the claim is a comment: both post one, then the earliest
     claim comment since the card's last run wins and the loser deletes its own. Only the winner moves labels."""
+    current = api('GET', repo_path(f'/issues/{number}'))
+    if current.get('state') != 'open' or status_of(current) != 'approved' or \
+            any(n.startswith('claimed:') for n in label_names(current)):
+        return False  # the cached queue was stale: someone else has it, or it was snoozed or closed
     nonce = uuid.uuid4().hex[:10]
     mine = comment(number, f'<!-- jarvis:claim {machine} {nonce} -->\nClaimed by **{machine}** at {now_iso()}')
     comments = paged(repo_path(f'/issues/{number}/comments'))
@@ -553,13 +564,22 @@ def snooze_of(number):
     return found
 
 
+_SNOOZE_CACHE = {}  # issue number -> (updated_at, snooze record): comments are only re-read when a card changes
+
+
 def snoozed(machine=None):
-    """Open snoozed cards with what each waits on (kind None = snoozed by hand). Used by the hub too."""
+    """Open snoozed cards with what each waits on (kind None = snoozed by hand). Used by the hub too.
+    One list call per 100 snoozed cards; a card's comments are read only when it changed since last time."""
     out = []
-    for i in paged(repo_path('/issues?state=open&labels=status:snoozed&per_page=100')):
+    for i in paged(repo_path('/issues?state=open&labels=status:snoozed')):
         if i.get('pull_request'):
             continue
-        s = snooze_of(i['number']) or {}
+        hit = _SNOOZE_CACHE.get(i['number'])
+        if hit and hit[0] == i['updated_at']:
+            s = hit[1]
+        else:
+            s = snooze_of(i['number']) or {}
+            _SNOOZE_CACHE[i['number']] = (i['updated_at'], s)
         if machine and s.get('machine') not in (None, machine):
             continue
         out.append({'number': i['number'], 'title': i['title'], 'kind': s.get('kind'), 'value': s.get('value'),
@@ -579,56 +599,41 @@ def machine_online(name, fresh_min=MACHINE_FRESH_MIN):
     return age.total_seconds() < fresh_min * 60
 
 
-def condition_met(s, exists=os.path.exists):
+def condition_met(s, exists=os.path.exists, closed=None):
+    """`closed`: optional set of recently closed card numbers, so a sweep checks every card condition with one call."""
     kind, value = s.get('kind'), s.get('value')
     if kind == 'file':
         return bool(value) and exists(value)
     if kind == 'card':
+        if closed is not None:
+            return int(value) in closed
         return api('GET', repo_path(f'/issues/{value}')).get('state') == 'closed'
     if kind == 'machine':
         return machine_online(value)
     if kind == 'time':
         return dt.datetime.now(dt.timezone.utc) >= _parse_iso(value)
-    return False  # snoozed by hand
+    return False  # snoozed by hand, or waiting on Jake or a Claude thread
 
 
 def wake_snoozed(machine, exists=os.path.exists):
-    """Call once per poll. Any card this machine watches whose condition is now met goes back to approved.
-    Cards snoozed by hand (no condition) are left alone. Returns the numbers woken."""
+    """Call once per poll (every few minutes is plenty). Any card this machine watches whose condition is now met
+    goes back to approved. Cards snoozed by hand, or on Jake or a Claude thread, are left alone. Returns the
+    numbers woken. Costs one list call plus, when a card waits on another card, one closed-cards call."""
+    mine = [s for s in snoozed(machine) if s['kind'] and s['machine'] == machine]
+    closed = None
+    if any(s['kind'] == 'card' for s in mine):
+        since = min(s['since'] or now_iso() for s in mine if s['kind'] == 'card')
+        since = (_parse_iso(since) - dt.timedelta(days=7)).isoformat()  # also catch cards closed just before
+        closed = {i['number'] for i in paged(repo_path('/issues?state=closed&since=' + urllib.parse.quote(since)))}
     woken = []
-    for s in snoozed(machine):
-        if s['kind'] and s['machine'] == machine and condition_met(s, exists):
+    for s in mine:
+        if condition_met(s, exists, closed):
             set_status(s['number'], 'approved')
             comment(s['number'], f'Snooze condition met ({s["kind"]}: `{s["value"]}`): back to approved at {now_iso()}.')
             woken.append(s['number'])
     if woken:
         wake()
     return woken
-
-
-SNOOZE_LINE_RE = re.compile(r'^\s*SNOOZE_UNTIL:\s*(.+?)\s*$', re.M)
-
-
-def parse_snooze_line(text):
-    """The Worker's `SNOOZE_UNTIL: <what> | <reason> [| producer=#N]` line (the last one in `text`), as
-    {kind, value, reason, producer}, or None. <what> is card:<n>, machine:<name>, time:<ISO>, file:<path>, or a
-    bare path or file name (a Windows drive letter like C: is a path, not a kind)."""
-    found = SNOOZE_LINE_RE.findall(text or '')
-    if not found:
-        return None
-    parts = [x.strip() for x in found[-1].split('|')]
-    what, reason, producer = parts[0].strip('"`'), '', None
-    for x in parts[1:]:
-        m = re.match(r'producer\s*=\s*#?(\d+)$', x)
-        if m:
-            producer = int(m.group(1))
-        else:
-            reason = (reason + ' ' + x).strip()
-    kind, value = 'file', what
-    m = re.match(r'^(\w{2,}):(.+)$', what)
-    if m and m.group(1).lower() in SNOOZE_KINDS:
-        kind, value = m.group(1).lower(), m.group(2).strip().strip('"`')
-    return {'kind': kind, 'value': value, 'reason': reason, 'producer': producer}
 
 
 # ---------------------------------------------------------------------------- approval-loop triage
