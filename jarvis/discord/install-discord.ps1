@@ -6,7 +6,7 @@
 # What it does:
 #   - saves jarvis_discord.py to C:\Jarvis\discord and installs discord.py for this user (pip --user)
 #   - finds the bot token: C:\Jarvis\secrets\discord-bot.txt, else a discord-bot.txt the rig sent over Tailscale
-#     (accepted with `tailscale file get`), else asks for it once. It is never printed.
+#     (`tailscale file get`, or Downloads where Windows Tailscale saves it), else asks for it once. It is never printed.
 #   - registers the "Jarvis Discord" task: starts at logon, and every 5 minutes starts it again if it died
 #   - starts it and checks http://127.0.0.1:8796/health
 # Safe to re-run (it updates the script and restarts the bot).
@@ -52,6 +52,12 @@ if (-not (Test-Path $tokenFile)) {
         $rest = Get-ChildItem $inbox -ErrorAction SilentlyContinue
         if ($rest) { Say "Other files received over Tailscale are in $inbox : $($rest.Name -join ', ')" 'Yellow' }
     }
+}
+if (-not (Test-Path $tokenFile)) {
+    # Tailscale on Windows saves Taildrop files straight into Downloads instead of the `file get` inbox
+    $dl = Get-ChildItem (Join-Path $env:USERPROFILE 'Downloads') -Filter 'discord-bot*.txt' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime | Select-Object -Last 1
+    if ($dl) { Move-Item $dl.FullName $tokenFile -Force; Say 'Took the bot token the rig sent (it was in Downloads).' }
 }
 if (-not (Test-Path $tokenFile)) {
     $sec = Read-Host 'Discord bot token' -AsSecureString
