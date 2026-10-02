@@ -79,6 +79,24 @@ class LookupTest(unittest.TestCase):
         self.assertEqual(lookup.resolve('capital of australia', 'Canberra, sir.', lambda n: 'x',
                                         log=lambda m: None), 'Canberra, sir.')
 
+    def test_direct_claude_answer_is_spoken_as_is(self):
+        with mock.patch.object(lookup, 'claude', return_value='About 2.5 to 3 watts at idle.\n'):
+            out = lookup.resolve('ask Claude what a Pi 5 draws at idle', 'whatever',
+                                 lambda n: "I haven't caught that question.", log=lambda m: None)
+        self.assertEqual(out, 'About 2.5 to 3 watts at idle.')
+
+    def test_claude_prompt_is_one_line(self):
+        seen = {}
+
+        def fake_run(args, **kw):
+            seen['prompt'] = args[2]
+            return mock.Mock(returncode=0, stdout='ok', stderr='')
+        with mock.patch.object(lookup.shutil, 'which', return_value='/bin/true'), \
+                mock.patch.object(lookup.subprocess, 'run', side_effect=fake_run):
+            lookup.claude('line one\nline two')
+        self.assertNotIn('\n', seen['prompt'])
+        self.assertIn('line one line two', seen['prompt'])
+
 
 if __name__ == '__main__':
     unittest.main()

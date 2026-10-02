@@ -121,6 +121,7 @@ def claude(question, timeout=CLAUDE_TIMEOUT):
     prompt = ('You are helping Jarvis, Jake\'s home voice assistant, answer him. Find the actual answer (search the '
               'web if it needs current facts). Reply with only the answer, in at most 4 short plain sentences, no '
               f'markdown.\n\nJake asked: {question}')
+    prompt = ' '.join(prompt.split())     # claude.cmd is a batch file: anything after a newline is dropped
     p = subprocess.run([exe, '-p', prompt, '--output-format', 'text', '--allowedTools', 'WebSearch', 'WebFetch'],
                        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout,
                        cwd=os.path.dirname(os.path.abspath(__file__)),
@@ -162,6 +163,7 @@ def find(kind, query, private=False, log=print):
 def resolve(text, first_reply, answer_with, log=print):
     """Return the final spoken reply. `answer_with(note)` re-asks the local model with a NOTE added to its context."""
     kind, query = direct(text)
+    asked_by_name = bool(kind)
     if not kind:
         kind, query = wants(first_reply, text)
     if not kind:
@@ -170,6 +172,8 @@ def resolve(text, first_reply, answer_with, log=print):
     if not src:
         return ("I couldn't get a straight answer from the web or from Claude just now, sir. "
                 "Say \"tell Claude to look into it\" and I'll put it on the board for tonight.")
+    if asked_by_name and src in ('claude', 'gemini'):   # Jake asked that helper: speak its answer as-is
+        return scrub(re.sub(r'\s+', ' ', facts))[:600]
     label = {'searx': 'a web search', 'gemini': 'Gemini', 'claude': 'Claude'}[src]
     note = (f'LOOKUP RESULT from {label} for "{query}":\n{facts}\n\nAnswer Jake now from this result in 1-3 spoken '
             'sentences, in character. Give the actual answer; mention the source only if it matters. Do not output '
