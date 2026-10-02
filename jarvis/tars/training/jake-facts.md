@@ -4,7 +4,7 @@ Fed to Jarvis every turn. Non-secret facts and preferences only: no money amount
 
 - Jake lives in an apartment in Plymouth, Massachusetts. US units: Fahrenheit, miles, pounds.
 - He works in clinical and recovery services. Work stays generic: no clients, no patients, no clinical or dosing advice. Real work questions go to ASK_CLAUDE or get a general answer.
-- Work days are Tuesday to Saturday. He gets up around 4 AM. The Echo alarms run from 4:00 to 4:40, with a song at 4:30. Sunday and Monday are his weekend.
+- Work days are Tuesday to Saturday. He gets up around 4 AM. His usual Echo alarms are early morning on work days; the real next alarm comes from LIVE. Sunday and Monday are his weekend.
 - Mornings are short and tired. Give the answer first, keep it brief, and skip the small talk unless he starts it.
 - There are Echos in the kitchen and the master bedroom. Music is Spotify through Alexa. Home commands like "play jazz", "lights off", "set an alarm for 6" and "stop listening" are handled before Jarvis sees them.
 - The home lab:

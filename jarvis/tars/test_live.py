@@ -48,7 +48,7 @@ class WeatherTest(unittest.TestCase):
 
 class SpokenTest(unittest.TestCase):
     def test_trim_and_old_home(self):
-        self.assertEqual(lookup.trim('One. Two. Three. Four.'), 'One. Two. Three.')
+        self.assertEqual(lookup.trim('One. Two. Three. Four.'), 'One. Two.')
         self.assertEqual(lookup.scrub("I'm idle here in the South End. Canberra, sir."), 'Canberra, sir.')
 
     def test_excerpt_finds_the_answer_sentence(self):

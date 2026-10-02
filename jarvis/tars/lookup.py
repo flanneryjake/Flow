@@ -58,7 +58,7 @@ def scrub(reply):
     return re.sub(r'\s{2,}', ' ', out).strip()
 
 
-def trim(reply, sentences=3):
+def trim(reply, sentences=2):
     """Spoken replies stay short: at most `sentences` sentences."""
     parts = SENTENCE_RE.split((reply or '').strip())
     return ' '.join(parts[:sentences]).strip()

@@ -408,7 +408,8 @@ def chat(text):
            f' (yesterday was {now - dt.timedelta(days=1):%A %B %d}). Humor setting: {humor()}%.']
     jf = jake_facts()
     if jf:
-        ctx.append('About Jake (background; use it, don\'t recite it):\n' + jf)
+        ctx.append('About Jake (standing background, NOT what is happening now; only LIVE and FACTS say what is '
+                   'happening now; don\'t recite it):\n' + jf)
     if summary:
         ctx.append('Memory of earlier conversations: ' + summary)
     lv = '' if fm else '\n'.join(x for x in (live.facts(text, log=log), home.facts(text)) if x)

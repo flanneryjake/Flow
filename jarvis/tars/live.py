@@ -27,7 +27,7 @@ _cache = {}
 
 # ----------------------------------------------------------------------------- sun (NOAA solar calculator)
 
-def sun_times(day=None, lat=LAT, lon=LON):
+def sun_times(day=None, lat=LAT, lon=LON, zenith=90.833):
     """(sunrise, sunset) as local-time datetimes for `day` (a date; default today). None when the sun doesn't cross.
     NOAA solar calculator equations (good to about a minute)."""
     day = day or dt.date.today()
@@ -46,7 +46,7 @@ def sun_times(day=None, lat=LAT, lon=LON):
     l0r, mr = math.radians(l0), math.radians(m)
     eqt = 4 * math.degrees(y * math.sin(2 * l0r) - 2 * e * math.sin(mr) + 4 * e * y * math.sin(mr) * math.cos(2 * l0r)
                            - 0.5 * y * y * math.sin(4 * l0r) - 1.25 * e * e * math.sin(2 * mr))
-    cos_h = (math.cos(math.radians(90.833)) / (math.cos(math.radians(lat)) * math.cos(dec))
+    cos_h = (math.cos(math.radians(zenith)) / (math.cos(math.radians(lat)) * math.cos(dec))
              - math.tan(math.radians(lat)) * math.tan(dec))
     if not -1 <= cos_h <= 1:
         return None
@@ -68,11 +68,14 @@ def sun_fact(text, now=None):
         return ''
     which = 'tomorrow' if day != now.date() else 'today'
     out = f'Sun in {PLACE} {which} ({day:%a %b %d}): sunrise {_clock(times[0])}, sunset {_clock(times[1])} (computed).'
+    civil = sun_times(day, zenith=96)
+    if civil:
+        out += f' Dark (end of twilight) at {_clock(civil[1])}.'
     if which == 'today':
-        for name, t in (('sunrise', times[0]), ('sunset', times[1])):
-            mins = round((t - now).total_seconds() / 60)
-            out += (f' {name.title()} is {_span(mins)} from now.' if mins >= 0 else
-                    f' {name.title()} was {_span(-mins)} ago.')
+        asks_rise = re.search(r'rise|dawn|light', text, re.I)
+        name, t = ('sunrise', times[0]) if asks_rise else ('sunset', times[1])
+        mins = round((t - now).total_seconds() / 60)
+        out += f' {name.title()} is {_span(mins)} from now.' if mins >= 0 else f' {name.title()} was {_span(-mins)} ago.'
     return out
 
 
