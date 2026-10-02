@@ -1,0 +1,113 @@
+# Jake's weekday mornings (asked 2026-10-01): Tue-Sat alarms at 4:00, 4:10, 4:15, 4:25, 4:30, 4:35, 4:40 AM on the
+# Master bedroom Echo. Jake 2026-10-02: only the 4:30 one plays a song, so 4:30 is the Spotify wake-up (not a
+# plain alarm) and there's no separate 4:45 music any more.
+#
+# The alarms are real Alexa one-time alarms that HA sets the evening before. So "Alexa, cancel/turn off my alarms"
+# works the normal way and clears only that morning; the next scheduled evening HA sets them again.
+# Alexa's six "alarm set" replies are muted (volume 0, then restored); then Jarvis announces the set once
+# on the same Echo. Jake asked 2026-10-01 for "the night before at 9" with an announcement; 9 PM assumed.
+
+automation:
+  - id: jarvis_set_morning_alarms
+    alias: Set tomorrow's 4 AM alarms (Mon-Fri evenings)
+    mode: single
+    # HA in WSL on the junk laptop runs its long timers minutes late (9 PM fired 21:01:40, 4:30 at 4:34 on
+    # 10/02), so check the wall clock every minute instead of one long time trigger; once per evening.
+    triggers:
+      - trigger: time_pattern
+        minutes: "*"
+        id: clock
+      - trigger: event          # manual re-run: fire event jarvis_set_morning_alarms
+        event_type: jarvis_set_morning_alarms
+        id: manual
+    conditions:
+      - condition: time
+        weekday: [mon, tue, wed, thu, fri]
+      - condition: template
+        value_template: >-
+          {% set hm = now().strftime('%H:%M') %}
+          {% set last = this.attributes.last_triggered %}
+          {{ trigger.id == 'manual' or ('21:00' <= hm < '21:15'
+             and (last is none or as_local(last).date() != now().date())) }}
+    actions:
+      - variables:
+          echo: >-
+            {{ integration_entities('alexa_media') | select('match', 'media_player\.')
+               | select('is_state_attr', 'friendly_name', 'Master bedroom') | first | default('') }}
+          alarm_sensor: "{{ echo | replace('media_player.', 'sensor.') ~ '_next_alarm' }}"
+          times: ["04:00", "04:10", "04:15", "04:25", "04:35", "04:40"]   # 4:30 is the song (jarvis_morning_music)
+          spoken: ["4 AM", "4:10 AM", "4:15 AM", "4:25 AM", "4:35 AM", "4:40 AM"]
+          # Amazon doesn't always report volume; then skip muting rather than restore a guessed level.
+          old_volume: "{{ state_attr(echo, 'volume_level') }}"
+      - condition: template
+        value_template: "{{ echo != '' }}"
+      - if:
+          - condition: template
+            value_template: "{{ old_volume is number }}"
+        then:
+          - action: media_player.volume_set
+            target: { entity_id: "{{ echo }}" }
+            data: { volume_level: 0 }
+      - repeat:
+          for_each: "{{ range(times | length) | list }}"
+          sequence:
+            # Skip alarms that already exist, so a manual re-run never doubles them.
+            - if:
+                - condition: template
+                  value_template: >-
+                    {{ (times[repeat.item] ~ ':00') not in (state_attr(alarm_sensor, 'sorted_active') | string) }}
+              then:
+                - action: media_player.play_media
+                  target: { entity_id: "{{ echo }}" }
+                  data:
+                    media_content_type: custom
+                    media_content_id: "set an alarm for {{ spoken[repeat.item] }}"
+                - delay: { seconds: 8 }
+      - delay: { seconds: 5 }
+      - if:
+          - condition: template
+            value_template: "{{ old_volume is number }}"
+        then:
+          - action: media_player.volume_set
+            target: { entity_id: "{{ echo }}" }
+            data: { volume_level: "{{ old_volume }}" }
+      - delay: { seconds: 2 }
+      - action: notify.alexa_media
+        data:
+          target: "{{ echo }}"
+          message: >-
+            Jarvis here. Tomorrow's alarms are set for 4, 4:10, 4:15, 4:25, 4:35 and 4:40,
+            with a song at 4:30. Say "Alexa, cancel my alarms" to skip just tomorrow.
+          data:
+            type: announce
+
+  - id: jarvis_morning_music
+    alias: 4:30 AM song (Tue-Sat)
+    triggers:                   # wall clock every minute, see the 9 PM automation above
+      - trigger: time_pattern
+        minutes: "*"
+    conditions:
+      - condition: time
+        weekday: [tue, wed, thu, fri, sat]
+      - condition: template
+        value_template: >-
+          {% set hm = now().strftime('%H:%M') %}
+          {% set last = this.attributes.last_triggered %}
+          {{ '04:30' <= hm < '04:40' and (last is none or as_local(last).date() != now().date()) }}
+    actions:
+      - variables:
+          echo: >-
+            {{ integration_entities('alexa_media') | select('match', 'media_player\.')
+               | select('is_state_attr', 'friendly_name', 'Master bedroom') | first | default('') }}
+          alarm_sensor: "{{ echo | replace('media_player.', 'sensor.') ~ '_next_alarm' }}"
+      # "Alexa, cancel my alarms" skips the song too: play only while the 4:35/4:40 alarms are still set.
+      - condition: template
+        value_template: >-
+          {% set active = state_attr(alarm_sensor, 'sorted_active') | string %}
+          {{ echo != '' and ('04:35:00' in active or '04:40:00' in active) }}
+      - action: media_player.play_media
+        target: { entity_id: "{{ echo }}" }
+        data:
+          media_content_type: custom
+          # Spotify's own picks for Jake; Jarvis can swap in its own list later.
+          media_content_id: "play my Discover Weekly on Spotify"
