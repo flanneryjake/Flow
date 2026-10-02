@@ -120,7 +120,7 @@ Step 'waker machines.json homebase->backup' {
     Backup $mj
     $holder | Add-Member -NotePropertyName 'backup' -NotePropertyValue $hb.Value
     $holder.PSObject.Properties.Remove('homebase')
-    $j | ConvertTo-Json -Depth 10 | Set-Content -Path $mj -Encoding UTF8
+    [IO.File]::WriteAllText($mj, ($j | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding $false))   # no BOM, Python readers too
 }
 
 # 6b. Small leftovers: the laptop Worker still polls Notion (retired), and :8766 is a redundant redirect
