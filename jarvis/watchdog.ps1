@@ -511,7 +511,7 @@ if ($DryRun) {
 }
 $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding UTF8
 
-# --- 7. Phone alerts (homebase only; it reads both rows) -------------------------------
+# --- 7. Phone alerts (homebase only; it reads every row) -------------------------------
 # Pushes through the hub's /api/notify (web push to Jake's phone) when a row's alert changes to something new,
 # and when the rig has been quiet for 30+ min while it has approved cards waiting (a sleeping idle rig is normal).
 # "Remote Control restarted" alone is not pushed: the watchdog already fixed it.
@@ -537,16 +537,25 @@ if ($machine -eq 'homebase' -and $ghTok -and -not $DryRun) {
     $prev = Get-Content $pushPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
     if ($prev) { $prev.PSObject.Properties | ForEach-Object { $pushed[$_.Name] = "$($_.Value)" } }
     $current = @{ homebase = ($alerts -join '; ') }
-    try {
-        $rb = "$((Get-HealthIssue 'rig').body)"
-        $rigAlert = if ($rb -match '(?m)^> (?!\[!WARNING\])(.+)$') { $Matches[1].Trim() } else { '' }
-        $rigSeen  = if ($rb -match '\*\*Last check-in:\*\* (\S+)') { $Matches[1] } else { $null }
-        $rigWait  = if ($rb -match '(?m)^\| Waiting cards \| (\d+) \|') { [int]$Matches[1] } else { 0 }
-        if ($rigSeen -and ($now - [datetime]$rigSeen).TotalMinutes -gt 30 -and $rigWait -gt 0) {
-            $rigAlert = "Offline since $(([datetime]$rigSeen).ToString('MM/dd HH:mm')) with $rigWait cards waiting"
-        }
-        $current['rig'] = $rigAlert
-    } catch { Log "Reading the rig health issue failed: $($_.Exception.Message)" }
+    # The other machines can't push (only homebase runs the hub), so homebase reads their rows and pushes for them.
+    foreach ($other in 'rig', 'backup') {
+        try {
+            $rb = "$((Get-HealthIssue $other).body)"
+            if (-not $rb) { continue }
+            $oAlert = if ($rb -match '(?m)^> (?!\[!WARNING\])(.+)$') { $Matches[1].Trim() } else { '' }
+            $oSeen  = if ($rb -match '\*\*Last check-in:\*\* (\S+)') { $Matches[1] } else { $null }
+            $oWait  = if ($rb -match '(?m)^\| Waiting cards \| (\d+) \|') { [int]$Matches[1] } else { 0 }
+            $quiet  = $oSeen -and ($now - [datetime]$oSeen).TotalMinutes -gt 30
+            if ($other -eq 'rig' -and $quiet -and $oWait -gt 0) {
+                # a sleeping rig is normal; only a quiet rig with work waiting is worth a push
+                $oAlert = "Offline since $(([datetime]$oSeen).ToString('MM/dd HH:mm')) with $oWait cards waiting"
+            } elseif ($other -eq 'backup' -and $quiet) {
+                # the backup runs Home Assistant, MQTT and the rig wake relay; it should never go quiet
+                $oAlert = "Offline since $(([datetime]$oSeen).ToString('MM/dd HH:mm')) (Home Assistant, alarms and rig wake)"
+            }
+            $current[$other] = $oAlert
+        } catch { Log "Reading the $other health issue failed: $($_.Exception.Message)" }
+    }
     foreach ($m in @($current.Keys)) {
         $a = "$($current[$m])"
         $worth = ($a -split '; ' | Where-Object { $_ -and $_ -ne 'Remote Control restarted' })
