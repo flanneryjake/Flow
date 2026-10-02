@@ -161,6 +161,9 @@ if (-not $testMode) {
     } catch { }
 } elseif ($env:GUARD_TEST_TASK_ENGINE) { $taskEngine = @([int]$env:GUARD_TEST_TASK_ENGINE) }
 
+# Processes that have a Claude Code child (a launcher, or a session running claude itself).
+$cliParents = @{}
+foreach ($p in $procs) { if ((Test-Cli $p) -and $byPid[$p.ppid]) { $cliParents[$p.ppid] = $true } }
 $printRx = '(^|\s)(-p|--print)(\s|$)'
 $bridgeRx = '--sdk-url|--input-format[ =]stream-json|--remote-control-session|--session-ingress'
 $items = New-Object System.Collections.Generic.List[object]
@@ -182,10 +185,17 @@ foreach ($p in $procs) {
     } else {
         $cliAnc = $anc | Where-Object { Test-Cli $_ } | Select-Object -First 1
         $deskAnc = $anc | Where-Object { Test-Desktop $_ } | Select-Object -First 1
-        if ($cliAnc -and $cliAnc.cmd -match '\bremote-control\b') {
-            $role = 'rc-session'
-            # Owner = the top remote-control process in the chain (the listener), not its launcher child.
-            $owner = (@($anc | Where-Object { (Test-Cli $_) -and $_.cmd -match '\bremote-control\b' }) | Select-Object -Last 1).pid
+        $topRc = @($anc | Where-Object { (Test-Cli $_) -and $_.cmd -match '\bremote-control\b' }) | Select-Object -Last 1
+        if ($topRc) {
+            # Somewhere under a Remote Control server. The server may sit behind a launcher child whose command
+            # line doesn't say remote-control, and a session may run its own claude children (hooks, -p calls).
+            # A session = the first Claude Code process below the server that looks like one: it carries the
+            # session flags (--print / stream-json / --sdk-url), or it has no Claude Code children of its own.
+            $between = @(); foreach ($a in $anc) { if ($a.pid -eq $topRc.pid) { break }; if (Test-Cli $a) { $between += $a } }
+            $sessionAbove = $between | Where-Object { $_.cmd -match "$printRx|$bridgeRx" -or -not $cliParents.ContainsKey($_.pid) } | Select-Object -First 1
+            if (-not $sessionAbove -and ($p.cmd -match "$printRx|$bridgeRx" -or -not $cliParents.ContainsKey($p.pid))) {
+                $role = 'rc-session'; $owner = $topRc.pid
+            } else { $role = 'nested'; $owner = $(if ($sessionAbove) { $sessionAbove.pid } else { $cliAnc.pid }) }
         }
         elseif ($cliAnc) { $role = 'nested'; $owner = $cliAnc.pid }
         elseif ($deskAnc) { $role = 'desktop-code'; $owner = $deskAnc.pid }
