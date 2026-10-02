@@ -1,12 +1,12 @@
 #!/bin/bash
-# Jarvis Pi first boot. cloud-init runs this once (runcmd in user-data), as root, after the network is up.
+# Hal9000 (the Jarvis Pi) first boot. cloud-init runs this once (runcmd in user-data), as root, after the network is up.
 # pi-flash-kit.ps1 on the rig puts it, the agent files and secrets.env in /boot/firmware/jarvis/.
 #
 # What it does:
 #   - moves secrets.env off the boot partition into /etc/jarvis (root-only) and wipes the copy on bootfs
 #   - sets the jarvis user's console password (kept on the rig, never in user-data)
 #   - updates the OS and turns on unattended security updates
-#   - installs Tailscale and joins the tailnet as jarvis-pi, with Tailscale SSH on
+#   - installs Tailscale and joins the tailnet as hal9000, with Tailscale SSH on
 #   - installs the Jarvis agent, which reports CPU/memory/temp/uptime to Home Assistant over MQTT
 #     (only started when an MQTT password was given; otherwise left installed and disabled)
 #   - turns on the hardware watchdog so a hung Pi reboots itself
@@ -36,7 +36,7 @@ fi
 # shellcheck disable=SC1091
 [ -f /etc/jarvis/secrets.env ] && . /etc/jarvis/secrets.env
 JARVIS_USER=${JARVIS_USER:-jarvis}
-PI_HOSTNAME=${PI_HOSTNAME:-jarvis-pi}
+PI_HOSTNAME=${PI_HOSTNAME:-hal9000}
 
 if [ -n "${PI_PASSWORD:-}" ]; then
     echo "$JARVIS_USER:$PI_PASSWORD" | chpasswd && ok password "console password set" || bad password "chpasswd failed"
@@ -91,12 +91,14 @@ EOF
     chmod 440 /etc/sudoers.d/jarvis-agent
     visudo -cf /etc/sudoers.d/jarvis-agent >/dev/null || rm -f /etc/sudoers.d/jarvis-agent
     install -d /etc/systemd/system/jarvis-agent.service.d
+    # Jake named the Pi Hal9000 (2026-10-02); entity ids stay jarvis_pi_* so the HA dashboard keeps working.
+    printf '[Service]\nEnvironment=JARVIS_DEVICE_NAME=Hal9000\n' > /etc/systemd/system/jarvis-agent.service.d/name.conf
     if [ -n "${MQTT_PASS:-}" ]; then
         esc=$(printf '%s' "$MQTT_PASS" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g')
         printf '[Service]\nEnvironment="MQTT_PASS=%s"\n' "$esc" > /etc/systemd/system/jarvis-agent.service.d/secret.conf
         chmod 600 /etc/systemd/system/jarvis-agent.service.d/secret.conf
         systemctl daemon-reload && systemctl enable --now jarvis-agent \
-            && ok agent "running, shows up in Home Assistant as Jarvis Pi" || bad agent "service failed to start"
+            && ok agent "running, shows up in Home Assistant as Hal9000" || bad agent "service failed to start"
     else
         systemctl daemon-reload
         ok agent "installed, not started (no MQTT password yet; add it with: sudo systemctl edit jarvis-agent)"
