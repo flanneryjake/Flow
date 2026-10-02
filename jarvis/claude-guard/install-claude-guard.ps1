@@ -86,7 +86,8 @@ if ($machine -eq 'homebase') {
     function Norm([string]$f) { ([IO.File]::ReadAllText($f)).Replace("`r`n", "`n").TrimEnd() }
     $changed = $false
     if (Test-Path $fleetDir) {
-        foreach ($f in 'fleet.py', 'fleet-panel.js') {
+        # fleet_api.py also reads the counts, so the panel shows them even where fleet.py has local changes.
+        foreach ($f in 'fleet.py', 'fleet_api.py', 'fleet-panel.js') {
             Get-FlowFile "fleet/$f" (Join-Path $tmp "$f.base") $baseRef
             Get-FlowFile "fleet/$f" (Join-Path $tmp $f)
             $targets = @(Join-Path $fleetDir $f)
