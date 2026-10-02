@@ -400,6 +400,8 @@ def new_card(title, body='', machine='any', priority=None, status='staged', card
     if spawned_from:
         if META_FOLLOWUP_RE.search(title):
             return None  # "stop re-approving #N"-style cards: snooze/send_back handle loops now
+        if open_followups(spawned_from) >= MAX_FOLLOWUPS:
+            return None  # this card already has its share of open follow-ups; finish those first
         dup = similar_open_child(spawned_from, title)
         if dup:
             LAST_NEW_CARD_WAS_NEW = False  # autotask.propose reads this so it doesn't comment on or count it
@@ -417,26 +419,39 @@ META_FOLLOWUP_RE = re.compile(r're-?approv|stop (re-?)?running|pause (re-?)?appr
 
 
 def _norm(t):
-    return set(re.findall(r'[a-z0-9]+', t.lower())) - {'the', 'a', 'an', 'to', 'for', 'of', 'and', 'on', 'in', 'card'}
+    words = re.findall(r'[a-z0-9]+', t.lower())
+    stop = {'the', 'a', 'an', 'to', 'for', 'of', 'and', 'on', 'in', 'card', 'let', 'allow', 'make', 'add', 'when'}
+    return {w[:-1] if len(w) > 4 and w.endswith('s') else w for w in words} - stop
 
 
-def similar_open_child(parent, title, threshold=0.6):
-    """An open card with a similar title, spawned from `parent` or anywhere else, or None. Two search calls."""
+MAX_FOLLOWUPS = int(os.environ.get('JARVIS_MAX_FOLLOWUPS_PER_CARD', '2'))  # open follow-ups one card may have
+
+
+def similar_open_child(parent, title, threshold=0.6, sibling_threshold=0.4):
+    """An open card with a similar title, or None. Siblings (spawned from the same parent) match more loosely,
+    because a Worker re-running a card rewords the same follow-up. Two search calls (search has its own quota)."""
     want = _norm(title)
     words = ' '.join(sorted(want, key=len, reverse=True)[:4])
-    queries = [f'repo:{REPO} is:issue is:open "Spawned from #{parent}" in:body',  # siblings
-               f'repo:{REPO} is:issue is:open {words} in:title']                  # same ask from another card
-    items = []
-    for q in queries:
+    for q, limit in ((f'repo:{REPO} is:issue is:open "Spawned from #{parent}" in:body', sibling_threshold),
+                     (f'repo:{REPO} is:issue is:open {words} in:title', threshold)):
         try:
-            items += api('GET', '/search/issues?per_page=50&q=' + urllib.parse.quote(q)).get('items', [])
+            items = api('GET', '/search/issues?per_page=50&q=' + urllib.parse.quote(q)).get('items', [])
         except GitHubError:
-            pass  # search down: file it rather than lose it
-    for i in items:
-        have = _norm(i['title'])
-        if want and have and len(want & have) / len(want | have) >= threshold:
-            return i['number']
+            continue  # search down: file it rather than lose it
+        for i in items:
+            have = _norm(i['title'])
+            if want and have and len(want & have) / len(want | have) >= limit:
+                return i['number']
     return None
+
+
+def open_followups(parent):
+    """How many open cards were spawned from `parent` (one search call)."""
+    q = f'repo:{REPO} is:issue is:open "Spawned from #{parent}" in:body'
+    try:
+        return api('GET', '/search/issues?per_page=1&q=' + urllib.parse.quote(q)).get('total_count', 0)
+    except GitHubError:
+        return 0
 
 
 def approve(number, by='hub'):
