@@ -1,31 +1,23 @@
 # Jarvis watchdog. Runs every 5 min as a scheduled task (installed by install.ps1).
 #  1. Keeps `claude remote-control` alive, so phone/cloud Claude sessions can always reach this PC.
-#  2. Writes this machine's row in the Notion "Machine Health" table (Remote Control, Worker state, last card
-#     claimed, approved cards waiting, full snapshot), so a cloud session (which can't get onto Tailscale)
-#     and Jake's phone can see what this PC is doing and why a job is stuck. The table's Health column
-#     turns red on its own when a machine stops checking in for 15 min.
-# It never runs Notion cards or anything else: its only actions are starting the Remote Control task,
-# reading the Tasks board, and writing this machine's health row.
+#  2. Rewrites this machine's pinned "Health: <machine>" issue in the GitHub tasks repo (Remote Control, Worker
+#     state, last card claimed, approved cards waiting, full snapshot), so a cloud session (which can't get onto
+#     Tailscale) and Jake's phone can see what this PC is doing and why a job is stuck.
+# It never runs cards or anything else: its only actions are starting the Remote Control task, reading the
+# tasks repo, and writing this machine's health issue. Notion is no longer read or written (retired 2026-10-02).
 
 param(
-    [switch]$DryRun,    # print the Notion update instead of sending it (no push either)
+    [switch]$DryRun,    # print the health update instead of sending it (no push either)
     [switch]$TestPush   # after the normal check, send one test notification to Jake's phone through the hub
 )
 
 $ErrorActionPreference = 'Continue'
 $root    = $PSScriptRoot
 # Plain string: in Windows PowerShell 5.1 a Get-Content line carries PSPath/PSProvider notes that ConvertTo-Json
-# serializes in full, which made the Tasks query body too large for Notion (413).
+# serializes in full, which bloated request bodies.
 $machine = [string](Get-Content (Join-Path $root 'machine.txt') -ErrorAction SilentlyContinue | Select-Object -First 1)
 $machine = $machine.Trim()
 if (-not $machine) { $machine = $env:COMPUTERNAME }
-# Rows in the "🩺 Machine Health" database under Jarvis Command Center.
-$healthRows = @{
-    homebase = '3ea11c3639af816bbd70fd523fe28b81'
-    rig      = '3ea11c3639af81b5af25cb91f2f88cdd'
-    laptop   = '3eb11c3639af81188552c1a198ebf5f6'
-}
-$tasksDb      = '7c1c59e927644dfba461c88a67dbd32c'   # Notion Tasks board
 $idleAfterMin = 15   # Worker counts as idle with cards waiting once nothing has been claimed for this long
 $logDir = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -37,31 +29,30 @@ function Redact([string]$s) { $s -replace '(ntn_|secret_|sk-ant-|sk-|ghp_|github
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("$(Get-Date -Format 'MM/dd HH:mm') $machine watchdog")
 
-$token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'User')
-if (-not $token) { $token = [Environment]::GetEnvironmentVariable('NOTION_TOKEN', 'Machine') }
-if (-not $token) { $token = $env:NOTION_TOKEN }
-$headers = @{ Authorization = "Bearer $token"; 'Notion-Version' = '2022-06-28' }
-function Invoke-Notion([string]$method, [string]$path, $body) {
-    $json = $body | ConvertTo-Json -Depth 12
-    Invoke-RestMethod -Method $method -Uri "https://api.notion.com/v1/$path" -Headers $headers -TimeoutSec 30 `
-        -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
+# GitHub tasks repo (cards, claims and the health issues). Token: GITHUB_TASKS_TOKEN user environment variable.
+$ghTok  = @('User', 'Machine', 'Process') | ForEach-Object { [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', $_) } |
+    Where-Object { $_ } | Select-Object -First 1
+$ghRepo = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
+$ghHdr  = @{ Authorization = "Bearer $ghTok"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'jarvis-watchdog' }
+function Invoke-GH([string]$method, [string]$path, $body) {
+    $a = @{ Method = $method; Uri = "https://api.github.com/repos/$ghRepo/$path"; Headers = $ghHdr; TimeoutSec = 30 }
+    if ($null -ne $body) { $a.Body = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 8)); $a.ContentType = 'application/json; charset=utf-8' }
+    Invoke-RestMethod @a
 }
+# This machine's (and on homebase, the rig's) "Health: <machine>" issue, label health.
+$healthIssues = @()
+if ($ghTok) {
+    try { $healthIssues = @(Invoke-GH Get 'issues?state=open&labels=health&per_page=100') }
+    catch { Log "Reading the health issues failed: $(Redact $_.Exception.Message)" }
+}
+function Get-HealthIssue([string]$m) { $healthIssues | Where-Object { "$($_.title)" -match "^Health: $m(\s|$)" } | Select-Object -First 1 }
+$myHealth = Get-HealthIssue $machine
 
-# Remote kick: ticking "Restart Remote Control" on this machine's Machine Health row (by Jake, or by a cloud Claude
-# session through Notion) makes this run restart Remote Control even if its process looks alive, e.g. when it is
-# running but no longer connected. Section 6 unticks it again.
-$kickProp = 'Restart Remote Control'
-$kickHas  = $false
-$kick     = $false
-if ($token -and $healthRows[$machine]) {
-    try {
-        $me = Invoke-RestMethod -Method Get -Uri "https://api.notion.com/v1/pages/$($healthRows[$machine])" -Headers $headers -TimeoutSec 30
-        if ($me.properties.PSObject.Properties.Name -contains $kickProp) {
-            $kickHas = $true
-            $kick = [bool]$me.properties.$kickProp.checkbox -and -not $DryRun
-        }
-    } catch { Log "Reading the health row for a restart request failed: $($_.Exception.Message)" }
-}
+# Remote kick: adding the label "restart-rc" to this machine's health issue (by Jake from the GitHub app, or by a
+# cloud Claude session) makes this run restart Remote Control even if its process looks alive, e.g. when it is
+# running but no longer connected. Section 6 removes the label again.
+$kickLabel = 'restart-rc'
+$kick = $myHealth -and @($myHealth.labels | ForEach-Object { $_.name }) -contains $kickLabel -and -not $DryRun
 
 # --- 1. Remote Control ---------------------------------------------------------------
 # Two kinds of copy can be running:
@@ -172,7 +163,7 @@ if (-not $task) {
     $rcState = if ($copies.hand) { 'Up' } else { 'Task missing' }
     $lines.Add('Remote Control: task missing (re-run install.ps1)' + $(if ($copies.hand) { ', running by hand' } else { '' }))
 } elseif ($kick -or -not ($copies.task -or $copies.hand)) {
-    if ($kick) { Log 'Restart requested from the Machine Health row.'; $lines.Add('Remote Control: restart requested from Notion') }
+    if ($kick) { Log 'Restart requested from the health issue.'; $lines.Add('Remote Control: restart requested from GitHub') }
     $r = Restart-RemoteControl $task $kick
     $how = $r.notes -join '; '
     if ($r.ok) {
@@ -337,7 +328,6 @@ $now         = Get-Date
 $alerts      = New-Object System.Collections.Generic.List[string]
 if ($memAlert) { $alerts.Add($memAlert) }
 $waiting     = $null
-$waitingCards = @()
 $pausedUntil = $null
 $claimLogAt  = $null
 $statePath   = Join-Path $root 'state.json'
@@ -345,113 +335,47 @@ $state       = Get-Content $statePath -Raw -ErrorAction SilentlyContinue | Conve
 $lastClaim   = if ($state -and $state.lastClaim) { [datetime]$state.lastClaim } else { $null }
 $lastTitle   = if ($state) { "$($state.lastTitle)" } else { '' }
 
-if ($token) {
+$waitingNames = @()
+
+# Waiting cards come from the GitHub tasks repo: open, status:approved, unclaimed, for this machine or any.
+# Claims come from the Worker's claim comments.
+$waiting = $null
+if (-not $ghTok) {
+    $alerts.Add('GITHUB_TASKS_TOKEN is not set; waiting cards unknown and health not reported')
+} else {
     try {
-        # Cards the Worker could run right now: Approved, auto-executable, unclaimed, for this machine or Any.
-        $q = Invoke-Notion Post "databases/$tasksDb/query" @{ page_size = 100; filter = @{ and = @(
-            @{ property = 'Status'; select = @{ equals = 'Approved' } },
-            @{ property = 'Auto-executable'; checkbox = @{ equals = $true } },
-            @{ property = 'Claimed by'; rich_text = @{ is_empty = $true } },
-            @{ or = @(@{ property = 'Machine'; select = @{ equals = $machine } }, @{ property = 'Machine'; select = @{ equals = 'Any' } }) }
-        ) } }
-        $waitingCards = @($q.results)
-        $waiting = $waitingCards.Count
+        $issues = @(); $page = 1
+        do {
+            $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=all&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30)
+            $issues += $batch; $page++
+        } while ($batch.Count -eq 100 -and $page -le 10)
+        $issues = @($issues | Where-Object { -not $_.pull_request })
+        $ghReady = @($issues | Where-Object {
+            $n = @($_.labels | ForEach-Object { $_.name })
+            $_.state -eq 'open' -and $n -contains 'status:approved' -and -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
+                ($n -contains 'machine:any' -or $n -contains "machine:$machine" -or -not @($n | Where-Object { $_ -like 'machine:*' }))
+        })
+        $waiting = $ghReady.Count
+        $waitingNames = @($ghReady | ForEach-Object { "#$($_.number) $($_.title)" })
 
-        # Newest claims by this machine (the Worker stamps "Claimed by" = "<machine> MM/dd HH:mm").
-        $c = Invoke-Notion Post "databases/$tasksDb/query" @{ page_size = 25
-            filter = @{ property = 'Claimed by'; rich_text = @{ starts_with = "$machine " } }
-            sorts  = @(@{ timestamp = 'last_edited_time'; direction = 'descending' }) }
-        foreach ($p in @($c.results)) {
-            $t = Parse-Stamp (Plain $p.properties.'Claimed by'.rich_text) $now
-            if ($t -and (-not $lastClaim -or $t -gt $lastClaim)) {
+        # Newest claim by this machine, and whether a run was logged after it.
+        $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30)
+        $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
+        if ($claimC) {
+            $t = ([datetime]$claimC.created_at).ToLocalTime()
+            if (-not $lastClaim -or $t -gt $lastClaim) {
                 $lastClaim  = $t
-                $lastTitle  = Plain $p.properties.Task.title
-                $claimLogAt = Parse-Stamp (Plain $p.properties.'Agent log'.rich_text) $now
-            }
-        }
-
-        # A Worker that hit the usage limit writes "WAITING: usage resets MM/dd HH:mm" to the card.
-        foreach ($p in @($waitingCards) + @($c.results)) {
-            $log = Plain $p.properties.'Agent log'.rich_text
-            if ($log -match 'usage resets (\d\d/\d\d \d\d:\d\d)') {
-                $r = Parse-Stamp $Matches[1] $now
-                if ($r -and $r -gt $now -and (-not $pausedUntil -or $r -gt $pausedUntil)) { $pausedUntil = $r }
+                $num        = [int](($claimC.issue_url -split '/')[-1])
+                $lastTitle  = "#$num " + "$(($issues | Where-Object { $_.number -eq $num } | Select-Object -First 1).title)"
+                $claimLogAt = $null
+                $runC = $cm | Where-Object { $_.issue_url -eq $claimC.issue_url -and "$($_.body)" -match "jarvis:runmeta \{[^}]*`"machine`": `"$machine`"" } | Select-Object -First 1
+                if ($runC) { $claimLogAt = ([datetime]$runC.created_at).ToLocalTime() }
             }
         }
     } catch {
-        $alerts.Add('Could not read the Tasks board: ' + $_.Exception.Message)
-        Log "Tasks query failed: $($_.Exception.Message)"
-    }
-}
-$waitingNames = @($waitingCards | ForEach-Object { Plain $_.properties.Task.title })
-
-# A machine whose Worker reads GitHub Issues (JARVIS_QUEUE=github) counts its waiting cards there instead:
-# open, status:approved, unclaimed, for this machine or any; plus Notion cards still Approved that have no GitHub
-# copy yet (no issue with the same title or carrying the Notion page id). Claims come from the claim comments.
-# No JARVIS_QUEUE variable (agent.py may keep it in its own settings): treat it as github when agent.log mentions
-# queue=github or ghq, or when this machine posted a claim comment in the tasks repo in the last 24 h.
-$queueMode = @('Process', 'User', 'Machine') | ForEach-Object { [Environment]::GetEnvironmentVariable('JARVIS_QUEUE', $_) } |
-    Where-Object { $_ } | Select-Object -First 1
-if (-not $queueMode -and [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')) {
-    if (@($agentLines | Where-Object { $_ -match '(?i)queue\s*[=:]\s*github|\bghq\b' }).Count) { $queueMode = 'github' }
-    else {
-        try {
-            $repoQ = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
-            $since = (Get-Date).ToUniversalTime().AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ssZ')
-            $recent = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$repoQ/issues/comments?since=$since&per_page=100" -TimeoutSec 30 -Headers @{
-                Authorization = "Bearer $([Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User'))"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'jarvis-watchdog' })
-            if (@($recent | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " -and ([datetime]$_.created_at).ToUniversalTime() -gt (Get-Date).ToUniversalTime().AddHours(-24) }).Count) { $queueMode = 'github' }
-        } catch { Log "GitHub queue check failed: $(Redact $_.Exception.Message)" }
-    }
-}
-if ("$queueMode".Trim().ToLower() -eq 'github') {
-    $ghTok  = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
-    $ghRepo = @([Environment]::GetEnvironmentVariable('JARVIS_TASKS_REPO', 'User'), 'flanneryjake/jarvis-tasks') | Where-Object { $_ } | Select-Object -First 1
-    $waiting = $null
-    if (-not $ghTok) {
-        $alerts.Add('Worker reads GitHub but GITHUB_TASKS_TOKEN is not set; waiting cards unknown')
-    } else {
-        try {
-            $ghHdr = @{ Authorization = "Bearer $ghTok"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'jarvis-watchdog' }
-            $issues = @(); $page = 1
-            do {
-                $batch = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues?state=all&per_page=100&page=$page" -Headers $ghHdr -TimeoutSec 30)
-                $issues += $batch; $page++
-            } while ($batch.Count -eq 100 -and $page -le 10)
-            $issues = @($issues | Where-Object { -not $_.pull_request })
-            $ghReady = @($issues | Where-Object {
-                $n = @($_.labels | ForEach-Object { $_.name })
-                $_.state -eq 'open' -and $n -contains 'status:approved' -and -not @($n | Where-Object { $_ -like 'claimed:*' }) -and
-                    ($n -contains 'machine:any' -or $n -contains "machine:$machine" -or -not @($n | Where-Object { $_ -like 'machine:*' }))
-            })
-            $ghTitles = @{}; foreach ($i in $issues) { $ghTitles["$($i.title)".Trim().ToLower()] = $true }
-            $ghBodies = ($issues | ForEach-Object { "$($_.body)" }) -join "`n"
-            $notionOnly = @($waitingCards | Where-Object {
-                -not $ghTitles.ContainsKey((Plain $_.properties.Task.title).Trim().ToLower()) -and
-                    -not $ghBodies.Contains("$($_.id)") -and -not $ghBodies.Contains("$($_.id)".Replace('-', ''))
-            })
-            $waiting = $ghReady.Count + $notionOnly.Count
-            $waitingNames = @($ghReady | ForEach-Object { "#$($_.number) $($_.title)" }) + @($notionOnly | ForEach-Object { Plain $_.properties.Task.title })
-
-            # Newest claim by this machine, and whether a run was logged after it.
-            $cm = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$ghRepo/issues/comments?sort=created&direction=desc&per_page=100" -Headers $ghHdr -TimeoutSec 30)
-            $claimC = $cm | Where-Object { "$($_.body)" -match "^<!-- jarvis:claim $machine " } | Select-Object -First 1
-            if ($claimC) {
-                $t = ([datetime]$claimC.created_at).ToLocalTime()
-                if (-not $lastClaim -or $t -gt $lastClaim) {
-                    $lastClaim  = $t
-                    $num        = [int](($claimC.issue_url -split '/')[-1])
-                    $lastTitle  = "#$num " + "$(($issues | Where-Object { $_.number -eq $num } | Select-Object -First 1).title)"
-                    $claimLogAt = $null
-                    $runC = $cm | Where-Object { $_.issue_url -eq $claimC.issue_url -and "$($_.body)" -match "jarvis:runmeta \{[^}]*`"machine`": `"$machine`"" } | Select-Object -First 1
-                    if ($runC) { $claimLogAt = ([datetime]$runC.created_at).ToLocalTime() }
-                }
-            }
-        } catch {
-            $waiting = $null
-            $alerts.Add('Could not read the GitHub task queue: ' + $_.Exception.Message)
-            Log "GitHub queue query failed: $(Redact $_.Exception.Message)"
-        }
+        $waiting = $null
+        $alerts.Add('Could not read the GitHub task queue: ' + $_.Exception.Message)
+        Log "GitHub queue query failed: $(Redact $_.Exception.Message)"
     }
 }
 foreach ($l in @($tail) + @($agentLines)) {
@@ -513,59 +437,35 @@ if ($needsJake) { $alerts.Insert(0, "Needs Jake: $needsJake") }
 $portsDown = @($portStatus | Where-Object { $_ -like '*DOWN' })
 if ($portsDown) { $alerts.Add('Down: ' + (($portsDown | ForEach-Object { ($_ -split ' :')[0] }) -join ', ')) }
 
-# --- 6. Write this machine's health row -----------------------------------------------
-function RT([string]$s) {
-    if (-not $s) { return , @() }
-    if ($s.Length -gt 1990) { $s = $s.Substring(0, 1990) }
-    return , @(@{ type = 'text'; text = @{ content = $s } })
-}
-function NDate($d) { if ($d) { @{ start = $d.ToString('yyyy-MM-ddTHH:mm:sszzz') } } else { $null } }
-
+# --- 6. Write this machine's health issue ---------------------------------------------
 $snapshot = ($lines -join "`n")
-$props = [ordered]@{
-    'Last check-in'     = @{ date = (NDate $now) }
-    'Remote Control'    = @{ select = @{ name = $rcState } }
-    'Worker'            = @{ select = @{ name = $worker } }
-    'Waiting cards'     = @{ number = $waiting }
-    'Last claim'        = @{ date = (NDate $lastClaim) }
-    'Last claimed card' = @{ rich_text = (RT $lastTitle) }
-    'Alert'             = @{ rich_text = (RT ($alerts -join '; ')) }
-    'Snapshot'          = @{ rich_text = (RT $snapshot) }
+$fields = [ordered]@{
+    'Remote Control'    = $rcState
+    'Worker'            = $worker
+    'Waiting cards'     = $(if ($null -ne $waiting) { $waiting } else { 'unknown' })
+    'Last claim'        = $claimText
+    'Last claimed card' = $lastTitle
 }
-if ($kickHas) { $props[$kickProp] = @{ checkbox = $false } }
-$row = $healthRows[$machine]
+$body = @("**Last check-in:** $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss+00:00'))", '')
+if ($alerts.Count) { $body += @('> [!WARNING]', ('> ' + ($alerts -join '; ')), '') }
+$body += @('| | |', '|---|---|') + @($fields.Keys | ForEach-Object { "| $_ | $("$($fields[$_])".Replace('|', '/')) |" })
+$tail5k = $snapshot.Trim(); if ($tail5k.Length -gt 5000) { $tail5k = $tail5k.Substring($tail5k.Length - 5000) }
+$body += @('', '```', $tail5k.Replace('```', "'''"), '```')
+$title = "Health: $machine" + $(if ($worker) { " - $worker" } else { '' })
+$labels = @('health') + @($(if ($myHealth) { $myHealth.labels | ForEach-Object { $_.name } }) |
+    Where-Object { $_ -notin @('health', 'health:alert', $kickLabel) }) + @($(if ($alerts.Count) { 'health:alert' }))
+$update = @{ title = $title; body = ($body -join "`n"); labels = @($labels | Where-Object { $_ }) }
 if ($DryRun) {
-    @{ row = $row; properties = $props } | ConvertTo-Json -Depth 12
-} elseif ($token -and $row) {
-    try { Invoke-Notion Patch "pages/$row" @{ properties = $props } | Out-Null }
-    catch { Log "Notion health update failed: $($_.Exception.Message)" }
+    $update | ConvertTo-Json -Depth 5
+} elseif ($ghTok) {
+    try {
+        if ($myHealth) { Invoke-GH Patch "issues/$($myHealth.number)" $update | Out-Null }
+        else { Invoke-GH Post 'issues' $update | Out-Null }
+    } catch { Log "GitHub health update failed: $(Redact $_.Exception.Message)" }
 } else {
-    Log "No NOTION_TOKEN or unknown machine '$machine'; health row not updated."
+    Log 'No GITHUB_TASKS_TOKEN; health issue not updated.'
 }
 $snapshot | Set-Content -Path (Join-Path $logDir 'last-snapshot.txt') -Encoding UTF8
-
-# Same row on GitHub (the pinned "Health: <machine>" issue in the tasks repo), while Notion is phased out.
-# Runs only once GITHUB_TASKS_TOKEN is set (user environment variable) and ghq.py is in C:\Jarvis\ghq.
-$ghq = 'C:\Jarvis\ghq\ghq.py'
-$ghToken = [Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN', 'User')
-$py = Get-Command python, py -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($ghToken -and (Test-Path $ghq) -and $py -and -not $DryRun) {
-    $healthJson = Join-Path $logDir 'health.json'
-    @{
-        fields   = [ordered]@{
-            'Remote Control'    = $rcState
-            'Worker'            = $worker
-            'Waiting cards'     = $(if ($null -ne $waiting) { $waiting } else { 'unknown' })
-            'Last claim'        = $claimText
-            'Last claimed card' = $lastTitle
-        }
-        alerts   = @($alerts)
-        snapshot = $snapshot
-    } | ConvertTo-Json -Depth 5 | Set-Content -Path $healthJson -Encoding UTF8
-    $env:GITHUB_TASKS_TOKEN = $ghToken
-    $out = & $py.Source $ghq health --machine $machine --json $healthJson 2>&1
-    if ($LASTEXITCODE -ne 0) { Log "GitHub health update failed: $(Redact "$out")" }
-}
 
 # --- 7. Phone alerts (homebase only; it reads both rows) -------------------------------
 # Pushes through the hub's /api/notify (web push to Jake's phone) when a row's alert changes to something new,
@@ -573,7 +473,7 @@ if ($ghToken -and (Test-Path $ghq) -and $py -and -not $DryRun) {
 # "Remote Control restarted" alone is not pushed: the watchdog already fixed it.
 $notifyUrls = @('http://127.0.0.1:8770/api/notify', 'http://127.0.0.1:8765/api/notify')
 function Send-Push([string]$title, [string]$text) {
-    $json = @{ title = $title; body = $text; message = $text; tag = 'jarvis-health'; url = 'https://app.notion.com/p/2e1df4a5efd6402689c5e67ee1691954' } | ConvertTo-Json
+    $json = @{ title = $title; body = $text; message = $text; tag = 'jarvis-health'; url = "https://github.com/$ghRepo/issues?q=is%3Aopen+label%3Ahealth" } | ConvertTo-Json
     foreach ($u in $notifyUrls) {
         try {
             Invoke-RestMethod -Method Post -Uri $u -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 10 | Out-Null
@@ -587,22 +487,22 @@ if ($TestPush) {
     if (Send-Push 'Jarvis test' "Test push from the $machine watchdog") { 'Push sent.' } else { "Push failed; see $log" }
     return
 }
-if ($machine -eq 'homebase' -and $token -and -not $DryRun) {
+if ($machine -eq 'homebase' -and $ghTok -and -not $DryRun) {
     $pushPath = Join-Path $root 'pushed.json'
     $pushed = @{}
     $prev = Get-Content $pushPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
     if ($prev) { $prev.PSObject.Properties | ForEach-Object { $pushed[$_.Name] = "$($_.Value)" } }
     $current = @{ homebase = ($alerts -join '; ') }
     try {
-        $rp = Invoke-RestMethod -Method Get -Uri "https://api.notion.com/v1/pages/$($healthRows['rig'])" -Headers $headers -TimeoutSec 30
-        $rigAlert = Plain $rp.properties.Alert.rich_text
-        $rigSeen  = $rp.properties.'Last check-in'.date.start
-        $rigWait  = $rp.properties.'Waiting cards'.number
+        $rb = "$((Get-HealthIssue 'rig').body)"
+        $rigAlert = if ($rb -match '(?m)^> (?!\[!WARNING\])(.+)$') { $Matches[1].Trim() } else { '' }
+        $rigSeen  = if ($rb -match '\*\*Last check-in:\*\* (\S+)') { $Matches[1] } else { $null }
+        $rigWait  = if ($rb -match '(?m)^\| Waiting cards \| (\d+) \|') { [int]$Matches[1] } else { 0 }
         if ($rigSeen -and ($now - [datetime]$rigSeen).TotalMinutes -gt 30 -and $rigWait -gt 0) {
             $rigAlert = "Offline since $(([datetime]$rigSeen).ToString('MM/dd HH:mm')) with $rigWait cards waiting"
         }
         $current['rig'] = $rigAlert
-    } catch { Log "Reading the rig row failed: $($_.Exception.Message)" }
+    } catch { Log "Reading the rig health issue failed: $($_.Exception.Message)" }
     foreach ($m in @($current.Keys)) {
         $a = "$($current[$m])"
         $worth = ($a -split '; ' | Where-Object { $_ -and $_ -ne 'Remote Control restarted' })
