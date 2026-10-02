@@ -24,7 +24,7 @@ also carries `health:alert` while there is an alert.
 | Waiting cards | Open `status:approved` issues with no `claimed:*` label for this machine, `machine:any`, or no machine label |
 | Last claim / Last claimed card | Newest `jarvis:claim` comment this machine posted |
 | Alert (warning box) | Why the machine isn't OK |
-| Snapshot (code block) | Full text: Remote Control, ports, Jarvis scheduled tasks, tail of the newest Worker log |
+| Snapshot (code block) | Full text: Remote Control, ports (on homebase also Home Assistant :8123 and MQTT :1883, with the HA log tail when HA is down), Jarvis scheduled tasks, tail of the newest Worker log |
 
 The flag this exists for: **Idle with cards waiting** means approved cards are sitting unclaimed, the Worker isn't
 running, and nothing has been claimed for 15 min. If the Worker's last log says `WAITING: usage resets ...`, the issue
@@ -62,6 +62,8 @@ $t=[Environment]::GetEnvironmentVariable('GITHUB_TASKS_TOKEN','User'); if(!$t){$
 
 The one-time questions (trust the folder, enable Remote Control) have to be answered at the keyboard.
 Claude Code has no way to pre-answer them, and without a terminal the server refuses to start.
+
+Home Assistant config (control panel, MQTT, agents for each machine) is in [homeassistant/](homeassistant/README.md).
 
 ## Gemini helper (free research and proofreading)
 

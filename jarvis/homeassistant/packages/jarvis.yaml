@@ -1,0 +1,138 @@
+# Jarvis package for Home Assistant. Put this file in <HA config>/packages/ and make sure
+# configuration.yaml has:
+#   homeassistant:
+#     packages: !include_dir_named packages
+# Secret it needs in secrets.yaml: github_auth: "Bearer <token>", a fine-grained token for
+# flanneryjake/jarvis-tasks with Issues: Read (the queue and health issues live there; Notion is retired).
+
+# --- GitHub queue: approvals waiting, needs-Jake, and each machine's Health issue ----------
+rest:
+  - resource: "https://api.github.com/search/issues?q=repo:flanneryjake/jarvis-tasks+is:issue+is:open+label:status:staged&per_page=1"
+    headers: &gh
+      Authorization: !secret github_auth
+      Accept: application/vnd.github+json
+      User-Agent: jarvis-home-assistant
+    scan_interval: 300
+    sensor:
+      - name: Jarvis approvals waiting
+        unique_id: jarvis_approvals_waiting
+        icon: mdi:inbox-arrow-down
+        value_template: "{{ value_json.total_count }}"
+
+  - resource: "https://api.github.com/search/issues?q=repo:flanneryjake/jarvis-tasks+is:issue+is:open+label:status:needs-jake&per_page=1"
+    headers: *gh
+    scan_interval: 300
+    sensor:
+      - name: Jarvis needs Jake
+        unique_id: jarvis_needs_jake
+        icon: mdi:account-alert
+        value_template: "{{ value_json.total_count }}"
+
+  # The watchdogs keep one open issue per machine (homebase #1, rig #2, laptop #203), titled
+  # "Health: <machine> - <Worker state>", with the full snapshot as its body and the health:alert label
+  # while something is wrong.
+  - resource: https://api.github.com/repos/flanneryjake/jarvis-tasks/issues/1
+    headers: *gh
+    scan_interval: 300
+    sensor:
+      - name: Homebase worker
+        unique_id: jarvis_homebase_worker
+        icon: mdi:robot-industrial
+        value_template: "{{ (value_json.title | regex_replace('^Health: homebase[^A-Za-z]*', '')) or 'Unknown' }}"
+        json_attributes: [body, updated_at, html_url]
+      - name: Homebase alert
+        unique_id: jarvis_homebase_alert
+        icon: mdi:alert-circle-outline
+        value_template: >-
+          {{ 'Alert' if value_json.labels | selectattr('name', 'eq', 'health:alert') | list else 'OK' }}
+      - name: Homebase last check-in
+        unique_id: jarvis_homebase_checkin
+        device_class: timestamp
+        value_template: "{{ value_json.updated_at }}"
+
+  - resource: https://api.github.com/repos/flanneryjake/jarvis-tasks/issues/2
+    headers: *gh
+    scan_interval: 300
+    sensor:
+      - name: Rig worker
+        unique_id: jarvis_rig_worker
+        icon: mdi:robot-industrial
+        value_template: "{{ (value_json.title | regex_replace('^Health: rig[^A-Za-z]*', '')) or 'Unknown' }}"
+        json_attributes: [body, updated_at, html_url]
+      - name: Rig alert
+        unique_id: jarvis_rig_alert
+        icon: mdi:alert-circle-outline
+        value_template: >-
+          {{ 'Alert' if value_json.labels | selectattr('name', 'eq', 'health:alert') | list else 'OK' }}
+      - name: Rig last check-in
+        unique_id: jarvis_rig_checkin
+        device_class: timestamp
+        value_template: "{{ value_json.updated_at }}"
+
+  - resource: https://api.github.com/repos/flanneryjake/jarvis-tasks/issues/203
+    headers: *gh
+    scan_interval: 300
+    sensor:
+      - name: Laptop worker
+        unique_id: jarvis_laptop_worker
+        icon: mdi:robot-industrial
+        value_template: "{{ (value_json.title | regex_replace('^Health: laptop[^A-Za-z]*', '')) or 'Unknown' }}"
+        json_attributes: [body, updated_at, html_url]
+      - name: Laptop alert
+        unique_id: jarvis_laptop_alert
+        icon: mdi:alert-circle-outline
+        value_template: >-
+          {{ 'Alert' if value_json.labels | selectattr('name', 'eq', 'health:alert') | list else 'OK' }}
+      - name: Laptop last check-in
+        unique_id: jarvis_laptop_checkin
+        device_class: timestamp
+        value_template: "{{ value_json.updated_at }}"
+
+# --- Wake the rig through the hub (same endpoint the Worker uses) --------------------------
+rest_command:
+  jarvis_wake_rig:
+    url: http://100.90.201.22:8765/wake/rig
+    method: GET
+    timeout: 20
+
+script:
+  jarvis_wake_rig:
+    alias: Wake the rig
+    icon: mdi:power
+    sequence:
+      - action: rest_command.jarvis_wake_rig
+
+# --- Jarvis Pi voice assistant (publishes over MQTT) ---------------------------------------
+# The Pi publishes jarvis/pi/status = online/offline (retained, with an MQTT last will) and
+# jarvis/pi/voice/last = {"text": "...", "reply": "...", "at": "ISO time"} after each command.
+mqtt:
+  binary_sensor:
+    - name: Jarvis Pi online
+      unique_id: jarvis_pi_online
+      state_topic: jarvis/pi/status
+      payload_on: online
+      payload_off: offline
+      device_class: connectivity
+  sensor:
+    - name: Jarvis last voice command
+      unique_id: jarvis_pi_last_voice
+      icon: mdi:microphone-message
+      state_topic: jarvis/pi/voice/last
+      value_template: "{{ (value_json.text | default(''))[:250] }}"
+      json_attributes_topic: jarvis/pi/voice/last
+
+# --- Phone alert when a machine goes red --------------------------------------------------
+automation:
+  - id: jarvis_machine_alert_to_phone
+    alias: Jarvis machine alert to phone
+    triggers:
+      - trigger: state
+        entity_id: [sensor.homebase_alert, sensor.rig_alert, sensor.laptop_alert]
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state.state == 'Alert' }}"
+    actions:
+      - action: notify.notify
+        data:
+          title: "Jarvis: {{ trigger.to_state.name }}"
+          message: "Open the Health issue: {{ state_attr(trigger.entity_id | replace('_alert', '_worker'), 'html_url') }}"
