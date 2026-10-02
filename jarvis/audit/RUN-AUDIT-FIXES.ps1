@@ -107,6 +107,22 @@ Step 'restart-on-failure' {
     $done -join ', '
 }
 
+# 6a. Waker machine list: its "homebase" entry still describes the junk laptop; rename that entry to "backup"
+Step 'waker machines.json homebase->backup' {
+    $mj = 'C:\Jarvis\waker\machines.json'
+    if (-not (Test-Path $mj)) { return 'SKIP: no machines.json' }
+    $j = Get-Content $mj -Raw | ConvertFrom-Json
+    $holder = if ($j.PSObject.Properties['machines']) { $j.machines } else { $j }
+    $hb = $holder.PSObject.Properties['homebase']
+    if (-not $hb) { return 'SKIP: no homebase entry' }
+    if (($hb.Value | ConvertTo-Json -Depth 10) -notmatch '5VE3C77|100\.90\.201\.22') { return 'SKIP: homebase entry already points at the 5060' }
+    if ($holder.PSObject.Properties['backup']) { throw 'both homebase and backup entries exist; left alone' }
+    Backup $mj
+    $holder | Add-Member -NotePropertyName 'backup' -NotePropertyValue $hb.Value
+    $holder.PSObject.Properties.Remove('homebase')
+    $j | ConvertTo-Json -Depth 10 | Set-Content -Path $mj -Encoding UTF8
+}
+
 # 6b. Small leftovers: the laptop Worker still polls Notion (retired), and :8766 is a redundant redirect
 Step 'JARVIS_QUEUE = github' { [Environment]::SetEnvironmentVariable('JARVIS_QUEUE', 'github', 'User') }
 Step 'tailscale serve :8766 off' {
