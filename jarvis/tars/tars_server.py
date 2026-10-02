@@ -30,6 +30,7 @@ import urllib.parse
 import urllib.request
 import winreg
 
+import home
 import live
 import lookup
 
@@ -377,6 +378,11 @@ def chat(text):
             note = ('Filing the card FAILED (GitHub error). Tell Jake it did not get filed and he should try again '
                     'or tell Claude directly.')
 
+    done = None if (fm or note) else home.act(text, log=log)
+    if done:   # "play jazz", "lights off", "set an alarm for 6": run it through HA, no model needed
+        append_turn('assistant', done)
+        return {'reply': done, 'humor': humor(), 'filed': None}
+
     fx = facts(text) if (TASK_WORDS.search(text) and not fm) else ''
     turns = [t for t in load_turns()[:-1] if t.get('at', '') >= PERSONA_SINCE][-WINDOW:]
     mem = read_json(SUMMARY, {})
@@ -386,7 +392,7 @@ def chat(text):
            f' (yesterday was {now - dt.timedelta(days=1):%A %B %d}). Humor setting: {humor()}%.']
     if summary:
         ctx.append('Memory of earlier conversations: ' + summary)
-    lv = '' if fm else live.facts(text, log=log)
+    lv = '' if fm else '\n'.join(x for x in (live.facts(text, log=log), home.facts(text)) if x)
     if lv:
         ctx.append('LIVE (fresh data; answer from it, do not LOOKUP these):\n' + lv)
     if fx:
@@ -435,6 +441,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(404, {'error': 'try POST /chat, GET /health, GET /history'})
 
     def do_POST(self):
+        if self.path.rstrip('/') == '/ha':   # Home Assistant's 2-minute home snapshot
+            try:
+                n = int(self.headers.get('Content-Length') or 0)
+                err = home.save_snapshot(json.loads(self.rfile.read(min(n, 100_000)).decode('utf-8', 'replace')))
+                return self._send(400 if err else 200, {'error': err} if err else {'ok': True})
+            except Exception as e:  # noqa: BLE001
+                return self._send(400, {'error': type(e).__name__})
         if self.path.rstrip('/') != '/chat':
             return self._send(404, {'error': 'try POST /chat'})
         try:

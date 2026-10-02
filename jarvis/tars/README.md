@@ -12,6 +12,10 @@
   (api.weather.gov, free, no key). Both go into the context as a LIVE block, so no web search is needed.
 - Lookups (`lookup.py`): `LOOKUP:` runs SearXNG (`JARVIS_SEARX_URL`) and reads the top two pages, then Gemini, then
   `claude -p`; `ASK_CLAUDE:` goes to Claude. Spoken replies are capped at 3 sentences (Claude answers excepted).
+- Home (`home.py`): Home Assistant (packages/tars_home.yaml on the backup laptop) pushes a snapshot to `POST /ha`
+  every 2 min (alarms, what's playing, listening switch, lights) plus its private webhook URL, kept in `ha.json`.
+  "play jazz", "lights off", "set an alarm for 6", "... in the bedroom" run as Alexa voice commands on that Echo;
+  buying, ordering, calling and messaging are refused. No HA token lives on this laptop.
 - Humor: "humor 40%" sets it (default 60), stored in `state.json`.
 - Runs at logon from the scheduled task "Jarvis TARS" (pythonw, hidden); the laptop watchdog restarts it if it dies.
 - Listens on 127.0.0.1:8790; `tailscale serve --bg --tcp 8790 tcp://127.0.0.1:8790` publishes it on the tailnet
