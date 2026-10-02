@@ -1,0 +1,101 @@
+[
+ {
+  "pid": 4,
+  "ppid": 0,
+  "name": "System",
+  "path": "",
+  "cmd": "",
+  "created": "2026-09-26T00:20:00Z",
+  "mb": 100,
+  "cpu": 5,
+  "session": 1
+ },
+ {
+  "pid": 8,
+  "ppid": 4,
+  "name": "svchost.exe",
+  "path": "C:\\Windows\\System32\\svchost.exe",
+  "cmd": "svchost -k netsvcs",
+  "created": "2026-09-26T00:21:00Z",
+  "mb": 100,
+  "cpu": 5,
+  "session": 1
+ },
+ {
+  "pid": 50,
+  "ppid": 4,
+  "name": "explorer.exe",
+  "path": "C:\\Windows\\explorer.exe",
+  "cmd": "explorer",
+  "created": "2026-09-26T17:00:00Z",
+  "mb": 100,
+  "cpu": 5,
+  "session": 1
+ },
+ {
+  "pid": 200,
+  "ppid": 8,
+  "name": "powershell.exe",
+  "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  "cmd": "powershell -NoProfile -Command \"claude.cmd remote-control --name homebase\"",
+  "created": "2026-10-02T13:00:00Z",
+  "mb": 100,
+  "cpu": 5,
+  "session": 1
+ },
+ {
+  "pid": 201,
+  "ppid": 200,
+  "name": "cmd.exe",
+  "path": "C:\\Windows\\System32\\cmd.exe",
+  "cmd": "cmd /c claude.cmd remote-control --name homebase",
+  "created": "2026-10-02T13:00:00Z",
+  "mb": 100,
+  "cpu": 5,
+  "session": 1
+ },
+ {
+  "pid": 202,
+  "ppid": 201,
+  "name": "node.exe",
+  "path": "C:\\Program Files\\nodejs\\node.exe",
+  "cmd": "node C:\\Users\\Jake\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js remote-control --name homebase",
+  "created": "2026-10-02T13:00:00Z",
+  "mb": 150,
+  "cpu": 5,
+  "session": 1
+ },
+ {
+  "pid": 970,
+  "ppid": 202,
+  "name": "claude.exe",
+  "path": "C:\\Users\\Jake\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+  "cmd": "C:\\Users\\Jake\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe --print --sdk-url https://api.anthropic.com/v1/sessions/x --remote-control-session-id cse_0 --input-format stream-json",
+  "created": "2026-10-02T21:00:00Z",
+  "mb": 400,
+  "cpu": 30,
+  "session": 1
+ },
+ {
+  "pid": 971,
+  "ppid": 202,
+  "name": "claude.exe",
+  "path": "C:\\Users\\Jake\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+  "cmd": "C:\\Users\\Jake\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe --print --sdk-url https://api.anthropic.com/v1/sessions/x --remote-control-session-id cse_1 --input-format stream-json",
+  "created": "2026-10-02T21:00:00Z",
+  "mb": 400,
+  "cpu": 30,
+  "session": 1
+ },
+ {
+  "pid": 972,
+  "ppid": 202,
+  "name": "claude.exe",
+  "path": "C:\\Users\\Jake\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+  "cmd": "C:\\Users\\Jake\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe --print --sdk-url https://api.anthropic.com/v1/sessions/x --remote-control-session-id cse_2 --input-format stream-json",
+  "created": "2026-10-02T21:00:00Z",
+  "mb": 400,
+  "cpu": 30,
+  "session": 1
+ }
+]
