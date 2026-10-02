@@ -445,39 +445,84 @@ def set_output_path(producer, path, waiting=None):
         wake()
 
 
+SNOOZE_KINDS = ('file', 'card', 'machine', 'time')
+MACHINE_FRESH_MIN = 10   # a PC counts as online if its health issue checked in this recently
+MAX_SNOOZES = 3          # a card snoozed this many times and still blocked goes to Jake with the history
+
+
+def _parse_iso(text):
+    t = dt.datetime.fromisoformat(str(text).strip().replace('Z', '+00:00'))
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+
+
+def snooze_until(number, kind, value, machine, reason='', producer=None):
+    """Park a card (status:snoozed) until a condition is met; never asks Jake. Returns the value watched.
+
+      file     value is a full path (or a bare name, see snooze_until_file) that must exist on `machine`
+      card     value is a card number that must be closed (done)
+      machine  value is a PC name ('rig', 'homebase', ...) whose health issue must have checked in recently
+      time     value is an ISO time (UTC if no zone) that must have passed
+
+    `machine` is the PC whose Worker checks the condition (for a file, the PC the file lands on)."""
+    if kind not in SNOOZE_KINDS:
+        raise ValueError(f'snooze kind must be one of {SNOOZE_KINDS}')
+    if kind == 'file':
+        value = str(value).strip().strip('"`')
+        if not _is_full_path(value):
+            producer = producer or parent_of(number)
+            if not producer:
+                raise ValueError(f'#{number}: "{value}" is not a full path and the card has no parent to edit; '
+                                 'pass a full path or producer=<card that makes the file>')
+            value = full_output_path(value, producer)
+            set_output_path(producer, value, waiting=number)
+        what = f'this file exists on {machine}: `{value}`'
+    elif kind == 'card':
+        value = int(str(value).lstrip('#'))
+        if value == number:
+            raise ValueError('a card cannot wait on itself')
+        what = f'#{value} is done'
+        producer = producer or value
+    elif kind == 'machine':
+        value = str(value).strip().lower()
+        if value not in MACHINES:
+            raise ValueError(f'unknown machine {value}')
+        what = f'**{value}** is online'
+    else:
+        value = _parse_iso(value).replace(microsecond=0).isoformat()
+        what = f'{value}'
+    meta = {'kind': kind, 'value': value, 'machine': machine, 'since': now_iso(), 'producer': producer}
+    if kind == 'file':
+        meta['path'] = value
+    set_status(number, 'snoozed', extra_remove=[f'claimed:{m}' for m in MACHINES] + ['resume'])
+    comment(number, f'<!-- jarvis:snooze {json.dumps(meta)} -->\n**Snoozed until {what}**' +
+                    (f'\n\n{reason.strip()}' if reason else '') +
+                    (f'\n\nMade by #{producer}.' if producer and kind == 'file' else '') +
+                    '\n\nIt goes back to approved by itself when that happens. No action needed from Jake.')
+    return value
+
+
 def snooze_until_file(number, path, machine, reason='', producer=None):
-    """Park a card (status:snoozed) until `path` exists on `machine`; never asks Jake.
+    """Park a card until `path` exists on `machine`; never asks Jake.
 
     If `path` is only a file name, the producing card (`producer`, else this card's parent) is edited to write
     to a full path, and the snooze watches that path. Returns the full path watched."""
-    if not _is_full_path(path):
-        producer = producer or parent_of(number)
-        if not producer:
-            raise ValueError(f'#{number}: "{path}" is not a full path and the card has no parent to edit; '
-                             'pass a full path or producer=<card that makes the file>')
-        path = full_output_path(path, producer)
-        set_output_path(producer, path, waiting=number)
-    meta = {'path': path, 'machine': machine, 'since': now_iso(), 'producer': producer}
-    set_status(number, 'snoozed', extra_remove=[f'claimed:{m}' for m in MACHINES] + ['resume'])
-    comment(number, f'<!-- jarvis:snooze {json.dumps(meta)} -->\n**Snoozed until this file exists on {machine}:** '
-                    f'`{path}`' + (f'\n\n{reason.strip()}' if reason else '') +
-                    (f'\n\nMade by #{producer}.' if producer else '') +
-                    '\n\nIt goes back to approved by itself when the file appears. No action needed from Jake.')
-    return path
+    return snooze_until(number, 'file', path, machine, reason, producer)
 
 
 def snooze_of(number):
-    """The latest snooze record on a card ({path, machine, since, producer}) or None."""
+    """The latest snooze record on a card ({kind, value, machine, since, producer}) or None."""
     found = None
     for c in paged(repo_path(f'/issues/{number}/comments')):
         m = SNOOZE_RE.search(c.get('body') or '')
         if m:
             found = json.loads(m.group(1))
+    if found and 'kind' not in found:  # written before kinds existed
+        found.update(kind='file', value=found.get('path'))
     return found
 
 
 def snoozed(machine=None):
-    """Open snoozed cards with the file each waits on (path None = snoozed by hand). Used by the hub too."""
+    """Open snoozed cards with what each waits on (kind None = snoozed by hand). Used by the hub too."""
     out = []
     for i in paged(repo_path('/issues?state=open&labels=status:snoozed&per_page=100')):
         if i.get('pull_request'):
@@ -485,23 +530,198 @@ def snoozed(machine=None):
         s = snooze_of(i['number']) or {}
         if machine and s.get('machine') not in (None, machine):
             continue
-        out.append({'number': i['number'], 'title': i['title'], 'path': s.get('path'),
-                    'machine': s.get('machine'), 'since': s.get('since'), 'producer': s.get('producer')})
+        out.append({'number': i['number'], 'title': i['title'], 'kind': s.get('kind'), 'value': s.get('value'),
+                    'path': s.get('path'), 'machine': s.get('machine'), 'since': s.get('since'),
+                    'producer': s.get('producer')})
     return out
 
 
+def machine_online(name, fresh_min=MACHINE_FRESH_MIN):
+    number = health_issue(name)
+    if not number:
+        return False
+    m = re.search(r'\*\*Last check-in:\*\* (\S+)', api('GET', repo_path(f'/issues/{number}')).get('body') or '')
+    if not m:
+        return False
+    age = dt.datetime.now(dt.timezone.utc) - _parse_iso(m.group(1))
+    return age.total_seconds() < fresh_min * 60
+
+
+def condition_met(s, exists=os.path.exists):
+    kind, value = s.get('kind'), s.get('value')
+    if kind == 'file':
+        return bool(value) and exists(value)
+    if kind == 'card':
+        return api('GET', repo_path(f'/issues/{value}')).get('state') == 'closed'
+    if kind == 'machine':
+        return machine_online(value)
+    if kind == 'time':
+        return dt.datetime.now(dt.timezone.utc) >= _parse_iso(value)
+    return False  # snoozed by hand
+
+
 def wake_snoozed(machine, exists=os.path.exists):
-    """Call once per poll. Any card snoozed on a file that now exists on this machine goes back to approved.
-    Cards snoozed by hand (no file) are left alone. Returns the numbers woken."""
+    """Call once per poll. Any card this machine watches whose condition is now met goes back to approved.
+    Cards snoozed by hand (no condition) are left alone. Returns the numbers woken."""
     woken = []
     for s in snoozed(machine):
-        if s['path'] and s['machine'] == machine and exists(s['path']):
+        if s['kind'] and s['machine'] == machine and condition_met(s, exists):
             set_status(s['number'], 'approved')
-            comment(s['number'], f'`{s["path"]}` is there now: back to approved at {now_iso()}.')
+            comment(s['number'], f'Snooze condition met ({s["kind"]}: `{s["value"]}`): back to approved at {now_iso()}.')
             woken.append(s['number'])
     if woken:
         wake()
     return woken
+
+
+SNOOZE_LINE_RE = re.compile(r'^\s*SNOOZE_UNTIL:\s*(.+?)\s*$', re.M)
+
+
+def parse_snooze_line(text):
+    """The Worker's `SNOOZE_UNTIL: <what> | <reason> [| producer=#N]` line (the last one in `text`), as
+    {kind, value, reason, producer}, or None. <what> is card:<n>, machine:<name>, time:<ISO>, file:<path>, or a
+    bare path or file name (a Windows drive letter like C: is a path, not a kind)."""
+    found = SNOOZE_LINE_RE.findall(text or '')
+    if not found:
+        return None
+    parts = [x.strip() for x in found[-1].split('|')]
+    what, reason, producer = parts[0].strip('"`'), '', None
+    for x in parts[1:]:
+        m = re.match(r'producer\s*=\s*#?(\d+)$', x)
+        if m:
+            producer = int(m.group(1))
+        else:
+            reason = (reason + ' ' + x).strip()
+    kind, value = 'file', what
+    m = re.match(r'^(\w{2,}):(.+)$', what)
+    if m and m.group(1).lower() in SNOOZE_KINDS:
+        kind, value = m.group(1).lower(), m.group(2).strip().strip('"`')
+    return {'kind': kind, 'value': value, 'reason': reason, 'producer': producer}
+
+
+# ---------------------------------------------------------------------------- approval-loop triage
+#
+# Jake approves a card, the Worker kicks it back as "needs Jake", he approves again, it bounces again. Before
+# any card goes back to Jake, the Worker asks a model (the local one first, Claude if that fails) what the card
+# is really waiting on. Only a blocker that truly is Jake (a decision, a PIN, a purchase, a login, something
+# physical) goes to him; anything else is snoozed on that condition.
+
+TRIAGE_KINDS = ('jake',) + SNOOZE_KINDS
+TRIAGE_PROMPT = """You are triaging a Jarvis task card that a Worker wants to send back to Jake for approval.
+Jake already approved it{loop}. Work out what the card is actually waiting on.
+
+Answer "jake" ONLY if nothing but Jake can unblock it: a decision or preference only he can make, a PIN,
+spending money, posting or sending something outside, deleting something, a password or login, or a
+physical action (plug in, load filament, press a button). Otherwise pick what it waits on:
+  file     a file that another card, a print, a sync or a download will produce (value: full path, or file name)
+  card     another card that has to finish first (value: its number)
+  machine  a PC that has to be online: {machines} (value: its name)
+  time     a time it can't start before, e.g. a usage reset (value: ISO time, UTC)
+
+Card #{number}: {title}
+{body}
+
+Why the Worker stopped it this time:
+{reason}
+
+History (oldest first):
+{history}
+
+Reply with one JSON object and nothing else:
+{{"kind": "jake|file|card|machine|time", "value": "...", "machine": "PC that will see the file (file only)", "why": "one sentence: what it waits on and why it kept looping"}}"""
+
+
+def bounce_history(number):
+    """Every time the card went to Jake, was approved, or was snoozed, oldest first."""
+    out = []
+    for c in paged(repo_path(f'/issues/{number}/comments')):
+        b = c.get('body') or ''
+        when = c.get('created_at', '')
+        if b.startswith('**Needs Jake:**'):
+            out.append({'at': when, 'event': 'needs-jake', 'text': b[len('**Needs Jake:**'):].strip()[:400]})
+        elif b.startswith('Approved via'):
+            out.append({'at': when, 'event': 'approved', 'text': b[:80]})
+        elif SNOOZE_RE.search(b):
+            out.append({'at': when, 'event': 'snoozed', 'text': re.sub(r'<!--.*?-->\n?', '', b).strip()[:300]})
+        elif b.startswith(RUN_MARK) and '"outcome": "needs-jake"' in b:
+            out.append({'at': when, 'event': 'run needs-jake',
+                        'text': re.sub(r'<!--.*?-->\n?', '', b).split('<details>')[0].strip()[:400]})
+    return out
+
+
+def triage_prompt(number, reason):
+    issue = api('GET', repo_path(f'/issues/{number}'))
+    hist = bounce_history(number)
+    bounces = sum(1 for h in hist if h['event'] in ('needs-jake', 'run needs-jake'))
+    loop = f', and it has already been sent back to him {bounces} time(s)' if bounces else ''
+    lines = '\n'.join(f"- {h['at']} {h['event']}: {h['text']}" for h in hist[-12:]) or '- (none)'
+    return TRIAGE_PROMPT.format(loop=loop, machines=', '.join(MACHINES), number=number, title=issue['title'],
+                                body=(issue.get('body') or '').strip()[:3000], reason=reason.strip()[:1500],
+                                history=lines)
+
+
+def parse_triage(text):
+    """The model's JSON verdict, checked. Raises ValueError if it is unusable."""
+    m = re.search(r'\{.*\}', text or '', re.S)
+    if not m:
+        raise ValueError('no JSON in triage answer')
+    v = json.loads(m.group(0))
+    if v.get('kind') not in TRIAGE_KINDS:
+        raise ValueError(f'bad kind {v.get("kind")!r}')
+    if v['kind'] != 'jake' and not str(v.get('value') or '').strip():
+        raise ValueError('missing value')
+    return v
+
+
+def ask_ollama(prompt, model=None, url=None, timeout=180):
+    model = model or os.environ.get('JARVIS_TRIAGE_MODEL', 'baby-jarvis')
+    url = url or os.environ.get('OLLAMA_URL', 'http://127.0.0.1:11434') + '/api/generate'
+    body = json.dumps({'model': model, 'prompt': prompt, 'stream': False, 'format': 'json', 'think': False,
+                       'options': {'temperature': 0}}).encode()
+    req = urllib.request.Request(url, data=body, method='POST', headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())['response']
+
+
+def ask_claude(prompt, timeout=300):
+    import subprocess
+    exe = os.environ.get('CLAUDE_EXE', 'claude')
+    r = subprocess.run([exe, '-p', '--output-format', 'text'], input=prompt, capture_output=True, text=True,
+                       timeout=timeout, encoding='utf-8', errors='replace')
+    return r.stdout
+
+
+def send_back(number, machine, reason, models=None):
+    """Use instead of ask_jake whenever a Worker would send a card back to Jake.
+
+    Asks the models in turn (default: local Ollama, then Claude) what the card waits on. Snoozes it on that, or
+    asks Jake only when the blocker really is him, or when the card has already been snoozed MAX_SNOOZES times
+    and is still stuck, or no model gave a usable answer. Returns ('snoozed', kind, value) or ('needs-jake',)."""
+    models = models if models is not None else [ask_ollama, ask_claude]
+    hist = bounce_history(number)
+    if sum(1 for h in hist if h['event'] == 'snoozed') >= MAX_SNOOZES:
+        ask_jake(number, f'{reason}\n\nThis card has been snoozed {MAX_SNOOZES} times and is still stuck, so it '
+                         'needs a look. Snooze history is above.')
+        return ('needs-jake',)
+    prompt, verdict, errors = triage_prompt(number, reason), None, []
+    for ask in models:
+        try:
+            verdict = parse_triage(ask(prompt))
+            break
+        except Exception as e:  # noqa: BLE001 - a down model falls through to the next one
+            errors.append(f'{getattr(ask, "__name__", "model")}: {e}')
+    if verdict and verdict['kind'] != 'jake':
+        try:
+            value = snooze_until(number, verdict['kind'], verdict['value'],
+                                 verdict.get('machine') if verdict['kind'] == 'file' and verdict.get('machine') in MACHINES
+                                 else machine, f'{verdict.get("why", "")}\n\nWorker said: {reason}'.strip())
+            return ('snoozed', verdict['kind'], value)
+        except (ValueError, GitHubError) as e:
+            errors.append(f'snooze: {e}')
+    why = (verdict or {}).get('why')
+    ask_jake(number, reason + (f'\n\nTriage: {why}' if why else '') +
+             (f'\n\n<!-- triage errors: {"; ".join(errors)[:500]} -->' if errors else ''))
+    return ('needs-jake',)
 
 
 # ---------------------------------------------------------------------------- the "now" lane
@@ -664,12 +884,17 @@ def main(argv=None):
     s.add_argument('number', type=int)
     s = sub.add_parser('snooze', help='park a card until a file exists (never asks Jake)')
     s.add_argument('number', type=int)
-    s.add_argument('path', help='full path, or a bare file name to route through the parent card')
-    s.add_argument('--machine', required=True, help='the PC where the file will appear')
+    s.add_argument('path', nargs='?', help='file to wait for: full path, or a bare name to route through the parent card')
+    s.add_argument('--until', help='other conditions: card:<n>, machine:<name>, time:<ISO>')
+    s.add_argument('--machine', required=True, help='the PC whose Worker checks it (for a file, where it appears)')
     s.add_argument('--reason', default='')
     s.add_argument('--producer', type=int, help='card that makes the file (default: the parent card)')
     s = sub.add_parser('snoozed', help='list snoozed cards and the file each waits on')
     s.add_argument('--machine')
+    s = sub.add_parser('send-back', help='triage a card a Worker would send to Jake: snooze it, or ask Jake')
+    s.add_argument('number', type=int)
+    s.add_argument('reason')
+    s.add_argument('--machine', required=True)
     s = sub.add_parser('wake-snoozed', help='approve snoozed cards whose file now exists here')
     s.add_argument('--machine', required=True)
     s = sub.add_parser('progress', help="rewrite a card's progress comment")
@@ -717,7 +942,15 @@ def main(argv=None):
         elif a.cmd == 'watch':
             print(f'Finished: {watch(a.number)}')
         elif a.cmd == 'snooze':
-            print(snooze_until_file(a.number, a.path, a.machine, a.reason, a.producer))
+            if a.until:
+                kind, _, value = a.until.partition(':')
+                print(snooze_until(a.number, kind, value, a.machine, a.reason, a.producer))
+            elif a.path:
+                print(snooze_until_file(a.number, a.path, a.machine, a.reason, a.producer))
+            else:
+                p.error('snooze needs a path or --until')
+        elif a.cmd == 'send-back':
+            print(json.dumps(send_back(a.number, a.machine, a.reason)))
         elif a.cmd == 'snoozed':
             print(json.dumps(snoozed(a.machine), indent=1))
         elif a.cmd == 'wake-snoozed':

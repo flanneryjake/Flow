@@ -1,38 +1,42 @@
 ---
 name: snooze-until-file
-description: Use when an approved Jarvis card can't start because a file it needs doesn't exist yet. Snooze the card until the file appears instead of asking Jake.
+description: Use when an approved Jarvis card can't go on because it is waiting on something other than Jake (a file, another card, a PC, a time). Snooze it on that instead of sending it back for approval.
 ---
 
-# Snooze until a file exists
+# Snooze instead of sending it back to Jake
 
-Jake already approved this card. A missing input file is a wait, not a question for him, so never stop the
-card as "needs Jake" just because an input file isn't there yet. Snooze it on that file instead. The Worker
-checks every poll and puts the card back to approved the moment the file appears.
+Jake already approved this card. Sending it back to him for something he can't fix makes him approve the same
+card over and over. So when the card is blocked, first work out **what it is actually waiting on**:
 
-## When to use it
+| Waiting on | Snooze line |
+|---|---|
+| A file another card, a print, a sync or a download will make | `SNOOZE_UNTIL: C:\full\path\file.ext \| reason` (or just `file.ext`, see below) |
+| Another card finishing | `SNOOZE_UNTIL: card:412 \| reason` |
+| A PC being online | `SNOOZE_UNTIL: machine:rig \| reason` (homebase, rig, laptop, pi) |
+| A time (usage reset, store opens, after a print) | `SNOOZE_UNTIL: time:2026-10-03T09:00:00Z \| reason` |
 
-- The card needs a file that another card, a print, a sync or a download will produce, and it isn't there yet.
-- Not for a missing decision, PIN, password, purchase or anything only Jake can give. Those still go to Jake.
-- Not when the file can't ever appear (wrong name, nothing produces it). Look first (see step 1).
+Only stop for Jake when nothing but Jake can unblock it: a decision or preference only he can make, a PIN,
+spending money, posting or sending something outside, deleting something, a password or login, or something
+physical (plug in, load filament, press a button). Those still end the run as "needs Jake" as before.
 
 ## Steps
 
-1. **Look for it first.** Search the expected folder, the card's parent ("Spawned from #N"), the parent's run
-   comments, and `C:\Jarvis\outputs-repo`. If the file is already somewhere, use it and carry on. Don't snooze.
-2. **Work out the full path** where the file will land, e.g. `C:\Jarvis\outputs-repo\cards\card-412\plate5.3mf`.
-   - If the card or its parent names the full path, use that.
-   - If you only know a bare file name (`plate5.3mf`), give just the name. The Worker then edits the parent
-     card (the one that makes the file) so it writes to
-     `C:\Jarvis\outputs-repo\cards\card-<parent>\<name>`, and snoozes on that path. If the parent already
-     finished, it is reopened only to put its file at that path (copy it there if it exists elsewhere).
-3. **Save anything you already did** in the card's work folder, so the next run continues from there.
-4. **End the run with this as your very last line**, and stop:
+1. **Look first.** If the file is already somewhere (the card's folder, the parent card "Spawned from #N" and
+   its run comments, `C:\Jarvis\outputs-repo`), or the other card is already done, use it and carry on.
+2. **Pick the condition** from the table. For a file, give the full path where it will land. If you only know
+   the name (`plate5.3mf`), give just the name: the Worker edits the parent card (the one that makes it) to
+   write to `C:\Jarvis\outputs-repo\cards\card-<parent>\<name>` and snoozes on that. If a different card makes
+   it, add ` | producer=#<number>`.
+3. **Save what you already did** in the card's work folder so the next run continues from there.
+4. **End the run with the snooze line as your very last line**, and stop.
 
-   ```
-   SNOOZE_UNTIL: <full path or bare file name> | <one short sentence: what makes it and why you need it>
-   ```
+The Worker checks the condition every poll and puts the card back to approved when it is met.
 
-   Optional, when you know which card makes the file and it isn't the parent: add ` | producer=#<number>`.
+## The safety net (no work for you)
+
+Even if a run ends as "needs Jake", the Worker asks a model what the card is really waiting on before it goes
+to Jake (the local model first, Claude if that fails). Anything that isn't really Jake gets snoozed instead.
+A card snoozed 3 times that is still stuck goes to Jake once, with its history, so it can't loop forever.
 
 ## Outside a Worker run
 
@@ -41,8 +45,10 @@ From a Claude Code session with the tasks token (homebase, the rig, a cloud sess
 ```
 python C:\Jarvis\ghq\ghq.py snooze 412 "C:\Jarvis\outputs-repo\cards\card-410\plate5.3mf" --machine homebase --reason "needs the slice from #410"
 python C:\Jarvis\ghq\ghq.py snooze 412 plate5.3mf --machine homebase          # bare name: edits the parent card
+python C:\Jarvis\ghq\ghq.py snooze 412 --until card:410 --machine homebase    # also machine:rig, time:<ISO>
+python C:\Jarvis\ghq\ghq.py send-back 412 "why it stopped" --machine homebase # triage instead of asking Jake
 python C:\Jarvis\ghq\ghq.py snoozed                                          # what's waiting on what
 python C:\Jarvis\ghq\ghq.py wake-snoozed --machine homebase                  # check now instead of next poll
 ```
 
-`--machine` is the PC where the file will appear (the one whose Worker checks the path).
+`--machine` is the PC whose Worker checks the condition (for a file, the PC it lands on).
