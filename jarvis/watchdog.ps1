@@ -40,13 +40,29 @@ function Invoke-GH([string]$method, [string]$path, $body) {
     Invoke-RestMethod @a
 }
 # This machine's (and on homebase, the rig's) "Health: <machine>" issue, label health.
+# The list is piped through ForEach-Object because Windows PowerShell 5.1 hands a JSON array back as ONE object,
+# which @() alone doesn't unroll. $healthRead stays false when the lookup fails, so a 403 (rate limit) or a timeout
+# never makes this run file a second "Health: <machine>" issue (that's how the 5060 got #555 and #556 on 10/02).
 $healthIssues = @()
+$healthRead = $false
 if ($ghTok) {
-    try { $healthIssues = @(Invoke-GH Get 'issues?state=open&labels=health&per_page=100') }
+    try { $healthIssues = @(Invoke-GH Get 'issues?state=open&labels=health&per_page=100' | ForEach-Object { $_ }); $healthRead = $true }
     catch { Log "Reading the health issues failed: $(Redact $_.Exception.Message)" }
 }
-function Get-HealthIssue([string]$m) { $healthIssues | Where-Object { "$($_.title)" -match "^Health: $m(\s|$)" } | Select-Object -First 1 }
+function Get-HealthIssue([string]$m) { $healthIssues | Where-Object { "$($_.title)" -match "^Health: $m(\s|$)" } | Sort-Object number | Select-Object -First 1 }
 $myHealth = Get-HealthIssue $machine
+# Remember our issue number so later runs keep writing the same one even if the list lookup fails.
+$healthIdFile = Join-Path $PSScriptRoot 'health-issue.txt'
+if (-not $myHealth -and $ghTok -and (Test-Path $healthIdFile)) {
+    $savedId = "$(Get-Content $healthIdFile -TotalCount 1)".Trim()
+    if ($savedId -match '^\d+$') {
+        try {
+            $i = Invoke-GH Get "issues/$savedId"
+            if ($i.state -eq 'open' -and "$($i.title)" -match "^Health: $machine(\s|$)") { $myHealth = $i }
+            $healthRead = $true
+        } catch { Log "Reading health issue #$savedId failed: $(Redact $_.Exception.Message)" }
+    }
+}
 
 # Remote kick: adding the label "restart-rc" to this machine's health issue (by Jake from the GitHub app, or by a
 # cloud Claude session) makes this run restart Remote Control even if its process looks alive, e.g. when it is
@@ -459,8 +475,15 @@ if ($DryRun) {
     $update | ConvertTo-Json -Depth 5
 } elseif ($ghTok) {
     try {
-        if ($myHealth) { Invoke-GH Patch "issues/$($myHealth.number)" $update | Out-Null }
-        else { Invoke-GH Post 'issues' $update | Out-Null }
+        if ($myHealth) {
+            Invoke-GH Patch "issues/$($myHealth.number)" $update | Out-Null
+            Set-Content -Path $healthIdFile -Value $myHealth.number -Encoding ASCII
+        } elseif ($healthRead) {
+            $created = Invoke-GH Post 'issues' $update
+            if ($created.number) { Set-Content -Path $healthIdFile -Value $created.number -Encoding ASCII }
+        } else {
+            Log 'Health issue lookup failed this run; not creating a new one.'
+        }
     } catch { Log "GitHub health update failed: $(Redact $_.Exception.Message)" }
 } else {
     Log 'No GITHUB_TASKS_TOKEN; health issue not updated.'
