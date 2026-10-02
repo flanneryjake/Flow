@@ -123,13 +123,25 @@ def to_16k(chunk, rate):
     return np.interp(np.linspace(0, len(chunk) - 1, n), np.arange(len(chunk)), chunk).astype(np.int16)
 
 
-def load_whisper():
+def load_whisper(cpu=False):
     from faster_whisper import WhisperModel
+    if not cpu:
+        try:
+            return WhisperModel("small.en", device="cuda", compute_type="float16")
+        except Exception as e:  # noqa: BLE001  (no CUDA libs -> CPU)
+            log(f"whisper on CPU ({e.__class__.__name__})")
+    return WhisperModel("base.en", device="cpu", compute_type="int8")
+
+
+def transcribe(whisper, audio):
+    """Text from audio. CUDA libs (cublas/cudnn) only load on first use, so a GPU model that
+    loaded fine can still fail here; then switch to CPU for good instead of crashing every time."""
     try:
-        return WhisperModel("small.en", device="cuda", compute_type="float16")
-    except Exception as e:  # noqa: BLE001  (no CUDA libs -> CPU)
-        log(f"whisper on CPU ({e.__class__.__name__})")
-        return WhisperModel("base.en", device="cpu", compute_type="int8")
+        return whisper, " ".join(s.text for s in whisper.transcribe(audio, language="en")[0]).strip()
+    except RuntimeError as e:
+        log(f"whisper GPU failed ({e}); switching to CPU. Fix: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 and put their bin folders on PATH")
+        whisper = load_whisper(cpu=True)
+        return whisper, " ".join(s.text for s in whisper.transcribe(audio, language="en")[0]).strip()
 
 
 def speak(text, url=None, echo=ECHO):
@@ -205,7 +217,7 @@ def run(once=False):
                 if quiet >= END_SILENCE_S and time.time() - start > 1.5:
                     break
         audio = np.concatenate(got).astype(np.float32) / 32768.0
-        text = " ".join(s.text for s in whisper.transcribe(audio, language="en")[0]).strip()
+        whisper, text = transcribe(whisper, audio)
         del audio, got               # nothing kept
         if once:
             print(text)

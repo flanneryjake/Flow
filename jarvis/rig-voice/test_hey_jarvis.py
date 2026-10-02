@@ -79,5 +79,28 @@ class Test(unittest.TestCase):
         srv.shutdown()
 
 
+class TranscribeTest(unittest.TestCase):
+    def test_gpu_failure_switches_to_cpu(self):
+        class Seg:
+            text = " hello there"
+
+        class Gpu:
+            def transcribe(self, audio, language):
+                raise RuntimeError("Library cublas64_12.dll is not found")
+
+        class Cpu:
+            def transcribe(self, audio, language):
+                return [Seg()], None
+
+        orig = hj.load_whisper
+        hj.load_whisper = lambda cpu=False: Cpu()
+        try:
+            model, text = hj.transcribe(Gpu(), None)
+        finally:
+            hj.load_whisper = orig
+        self.assertIsInstance(model, Cpu)
+        self.assertEqual(text, "hello there")
+
+
 if __name__ == "__main__":
     unittest.main()
