@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.request
 
@@ -100,6 +101,24 @@ class TranscribeTest(unittest.TestCase):
             hj.load_whisper = orig
         self.assertIsInstance(model, Cpu)
         self.assertEqual(text, "hello there")
+
+
+class HoldingLineTest(unittest.TestCase):
+    def test_slow_answer_gets_holding_line(self):
+        said = []
+        reply = hj.ask_with_holding_line("weather", wait=0.05, ask=lambda t: (time.sleep(0.2), "Rain later, sir.")[1],
+                                         say=said.append)
+        self.assertEqual((said, reply), (["One moment, sir."], "Rain later, sir."))
+
+    def test_fast_answer_has_no_holding_line(self):
+        said = []
+        reply = hj.ask_with_holding_line("hi", wait=1, ask=lambda t: "Hello, sir.", say=said.append)
+        self.assertEqual((said, reply), ([], "Hello, sir."))
+
+    def test_tars_down(self):
+        def boom(t):
+            raise OSError("down")
+        self.assertIn("isn't answering", hj.ask_with_holding_line("hi", wait=1, ask=boom, say=lambda m: None))
 
 
 if __name__ == "__main__":
