@@ -50,7 +50,7 @@ if (Test-Path $cfgPath) {
 }
 $cfg.bind = $bind
 $cfg | Add-Member -NotePropertyName disabled -NotePropertyValue $Disable -Force
-$cfg | ConvertTo-Json -Depth 6 | Set-Content $cfgPath -Encoding UTF8
+[IO.File]::WriteAllText($cfgPath, ($cfg | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
 Write-Host "node.json: $Node on ${bind}:8799, switched off: $($Disable -join ', ')"
 
 # 4. key pair (private stays here)

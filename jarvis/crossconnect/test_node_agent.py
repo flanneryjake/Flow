@@ -276,6 +276,12 @@ class HttpTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             na.main(['--make-key', 'rig', '--self-key', path])
 
+    def test_json_with_bom_loads(self):
+        path = os.path.join(self.tmp, 'bom.json')
+        with open(path, 'wb') as f:
+            f.write(b'\xef\xbb\xbf{"node": "5060"}')
+        self.assertEqual(na.load_json(path), {'node': '5060'})
+
     def test_public_keys_folder(self):
         folder = os.path.join(self.tmp, 'pubkeys')
         os.makedirs(folder)

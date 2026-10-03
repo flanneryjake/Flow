@@ -56,7 +56,7 @@ def now():
 
 def load_json(path, default=None):
     try:
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding='utf-8-sig') as f:    # -sig: PowerShell 5.1 writes a BOM
             return json.load(f)
     except FileNotFoundError:
         if default is not None:
