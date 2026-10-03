@@ -558,6 +558,8 @@ def log_run(number, machine, outcome, started=None, ended=None, summary='', log_
         return 'done'
     if outcome == 'needs-jake':
         set_status(number, 'needs-jake', extra_remove=remove)
+        if os.environ.get('JARVIS_JAKE_STEPS', 'on') != 'off':
+            _attach_jake_step(number, summary or 'The Worker stopped this card for you.')
         return 'needs-jake'
     if outcome in ('failed', 'timeout'):
         runs = [r for r in runs_of(number) if r.get('outcome') not in ('released', 'waiting-usage', 'paused')]
@@ -672,10 +674,19 @@ def approve(number, by='hub'):
     wake()
 
 
-def ask_jake(number, question):
+def ask_jake(number, question, step=None):
     # Question first, so anyone who sees the needs-jake label can already read it.
     comment(number, f'**Needs Jake:** {question}\n{RESET_MARK}')
     set_status(number, 'needs-jake', extra_remove=[f'claimed:{m}' for m in MACHINES])
+    # Then the To-Do item (place, steps, one link or a question): see "Jake steps" below.
+    if os.environ.get('JARVIS_JAKE_STEPS', 'on') != 'off':
+        if step:
+            try:
+                jake_step(number, step)
+            except Exception:  # noqa: BLE001 - never let the To-Do item break the hand-off
+                pass
+        else:
+            _attach_jake_step(number, question)
 
 
 # ---------------------------------------------------------------------------- snooze until a file exists
@@ -1067,6 +1078,117 @@ def send_back(number, machine, reason, models=None):
     return ('needs-jake',)
 
 
+# ---------------------------------------------------------------------------- Jake steps (the To-Do list)
+#
+# Whenever a card stops for Jake (ask_jake, a needs-jake run, send_back), it also gets ONE structured
+# "Jake step": where he does it, what to do, why, the steps and one link, or a question to answer. The phone
+# app's To-Do tab lists these grouped by place; a tick or an answer there comments on the card and sends it on.
+# The step is a hidden marker comment, so the card's history stays readable and nothing else has to change.
+
+JAKE_RE = re.compile(r'<!-- jarvis:jake (\{.*?\}) -->', re.S)
+JAKE_PLACES = ('rig', '5060', 'phone', 'homework')
+JAKE_AFTER = ('approve', 'close')
+JAKE_PROMPT = """A Jarvis task card has stopped because it needs Jake. Turn the reason into ONE clear step for his
+To-Do list. Jake has ADHD: plain words, verb first, no jargon, no card ids in the steps, nothing he does not need.
+
+Card #{number}: {title}
+{body}
+
+Why it needs Jake:
+{reason}
+
+Places: "rig" (big desktop PC), "5060" (the homebase laptop), "phone" (anything done in a browser, an app or an
+answer), "homework" (school). Pick where the hands-on part happens. Answers and decisions are "phone".
+
+Reply with one JSON object and nothing else:
+{{"place": "rig|5060|phone|homework", "title": "verb-first, under 70 characters",
+  "why": "one sentence: what it unlocks", "mins": 5,
+  "steps": ["3 to 5 short steps, only when he has to do something"],
+  "button": {{"label": "2-4 words", "url": "https://... the exact page, only if one exists in the text above"}},
+  "ask": "the question to answer, only when the card needs an answer instead of an action",
+  "after": "approve if his step lets the card run again, close if the card is only his task"}}"""
+
+
+def _clean_step(raw, issue, reason):
+    """Check a model's step and fill what is missing, so a bad answer still gives a usable To-Do item."""
+    s = raw if isinstance(raw, dict) else {}
+    title = str(s.get('title') or issue.get('title') or 'Card needs you').strip()[:90]
+    place = str(s.get('place') or '').strip().lower()
+    if place not in JAKE_PLACES:
+        place = 'phone'
+    step = {'place': place, 'title': title,
+            'why': str(s.get('why') or reason or '').strip().split('\n')[0][:200]}
+    try:
+        mins = int(s.get('mins') or 0)
+        if 0 < mins <= 240:
+            step['mins'] = mins
+    except (TypeError, ValueError):
+        pass
+    steps = [str(x).strip()[:200] for x in (s.get('steps') or []) if str(x).strip()][:6]
+    if steps:
+        step['steps'] = steps
+    b = s.get('button') or {}
+    if isinstance(b, dict) and str(b.get('url') or '').startswith(('https://', 'http://')):
+        step['button'] = {'label': str(b.get('label') or 'Open').strip()[:30], 'url': str(b['url']).strip()}
+    ask = str(s.get('ask') or '').strip()
+    if ask:
+        step['ask'] = ask[:500]
+    if not steps and not ask:
+        step['ask'] = (reason or title).strip()[:500]  # nothing to do by hand: it must be a question
+    step['after'] = s.get('after') if s.get('after') in JAKE_AFTER else 'approve'
+    if 'pin' in label_names(issue):
+        step['pin'] = True  # the To-Do tab asks for the PIN before it approves
+    return step
+
+
+def make_jake_step(number, reason, models=None):
+    """Ask a model (local first, then Claude) to turn `reason` into a Jake step. Never raises."""
+    issue = api('GET', repo_path(f'/issues/{number}'))
+    prompt = JAKE_PROMPT.format(number=number, title=issue.get('title', ''),
+                                body=(issue.get('body') or '').strip()[:2000], reason=(reason or '').strip()[:1500])
+    for ask in (models if models is not None else [ask_ollama, ask_claude]):
+        try:
+            m = re.search(r'\{.*\}', ask(prompt) or '', re.S)
+            if m:
+                return _clean_step(json.loads(m.group(0)), issue, reason)
+        except Exception:  # noqa: BLE001 - a down model falls through to the next one, then to the fallback
+            continue
+    return _clean_step({}, issue, reason)
+
+
+def jake_step(number, step):
+    """Attach a Jake step to a card (the newest one wins). `step` is checked first."""
+    issue = api('GET', repo_path(f'/issues/{number}'))
+    step = _clean_step(step, issue, step.get('why', '') if isinstance(step, dict) else '')
+    step['since'] = now_iso()
+    comment(number, f'<!-- jarvis:jake {json.dumps(step)} -->\n**On Jake\'s To-Do ({step["place"]}):** '
+                    f'{step["title"]}', dedupe=False)
+    return step
+
+
+def jake_step_of(number):
+    """The card's current Jake step, or None. A step written before the card's last approval no longer counts."""
+    current = None
+    for c in paged(repo_path(f'/issues/{number}/comments')):
+        b = c.get('body') or ''
+        m = JAKE_RE.search(b)
+        if m:
+            try:
+                current = json.loads(m.group(1))
+            except ValueError:
+                pass
+        elif b.startswith('Approved via') or (RESET_MARK in b and not b.startswith('**Needs Jake:**')):
+            current = None
+    return current
+
+
+def _attach_jake_step(number, reason):
+    try:
+        jake_step(number, make_jake_step(number, reason))
+    except Exception:  # noqa: BLE001 - the card is already with Jake; a missing To-Do item must not break that
+        pass
+
+
 # ---------------------------------------------------------------------------- the "now" lane
 
 def progress(number, machine, text, comment_id=None):
@@ -1211,6 +1333,12 @@ def main(argv=None):
     s = sub.add_parser('ask', help='stop a card until Jake answers')
     s.add_argument('number', type=int)
     s.add_argument('question')
+    s = sub.add_parser('jake-step', help="write a card's To-Do item for Jake (from a reason, or --json)")
+    s.add_argument('number', type=int)
+    s.add_argument('reason', nargs='?', default='')
+    s.add_argument('--json', help='a ready step: {"place", "title", "why", "steps", "button", "ask", "after"}')
+    s = sub.add_parser('jake-backfill', help='give every needs-jake card without a To-Do item one')
+    s.add_argument('--dry-run', action='store_true')
     s = sub.add_parser('health', help='rewrite this machine\'s health issue from a JSON file')
     s.add_argument('--machine', required=True)
     s.add_argument('--json', required=True, help='{"fields": {...}, "alerts": [...], "snapshot": "..."}')
@@ -1268,6 +1396,18 @@ def main(argv=None):
             approve(a.number, a.by)
         elif a.cmd == 'ask':
             ask_jake(a.number, a.question)
+        elif a.cmd == 'jake-step':
+            step = json.loads(a.json) if a.json else make_jake_step(a.number, a.reason)
+            print(json.dumps(jake_step(a.number, step), indent=1))
+        elif a.cmd == 'jake-backfill':
+            for i in paged(repo_path('/issues?state=open&labels=status:needs-jake&per_page=100')):
+                if i.get('pull_request') or jake_step_of(i['number']):
+                    continue
+                hist = [h for h in bounce_history(i['number']) if h['event'] in ('needs-jake', 'run needs-jake')]
+                reason = hist[-1]['text'] if hist else (i.get('body') or i['title'])
+                print(f"#{i['number']} {i['title'][:60]}")
+                if not a.dry_run:
+                    _attach_jake_step(i['number'], reason)
         elif a.cmd == 'health':
             with open(a.json, encoding='utf-8-sig') as f:
                 h = json.load(f)

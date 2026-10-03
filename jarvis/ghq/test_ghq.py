@@ -130,6 +130,7 @@ class GhqTest(unittest.TestCase):
             cache.clear()
         ghq._LAST_WAKE[0] = ghq._LAST_WRITE[0] = 0.0
         ghq._COOLDOWN[:] = [0.0, 0]
+        os.environ['JARVIS_JAKE_STEPS'] = 'off'
 
     def tearDown(self):
         ghq.request = self._request
@@ -313,6 +314,66 @@ class GhqTest(unittest.TestCase):
         ghq.log_run(c, 'rig', 'done', started='2026-09-30T10:00:00Z', ended='2026-09-30T10:06:00Z')
         top = ghq.usage()[0]
         self.assertEqual((top['number'], top['runs'], top['minutes']), (c, 1, 6.0))
+
+
+class JakeStepTest(unittest.TestCase):
+    """The To-Do item a card gets when it stops for Jake."""
+
+    labels, card = GhqTest.labels, GhqTest.card
+
+    def setUp(self):
+        GhqTest.setUp(self)
+        os.environ['JARVIS_JAKE_STEPS'] = 'on'
+        self._models = (ghq.ask_ollama, ghq.ask_claude)
+        self.answer = '{}'
+        ghq.ask_ollama = lambda prompt: self.answer
+        ghq.ask_claude = lambda prompt: (_ for _ in ()).throw(RuntimeError('claude not called in tests'))
+
+    def tearDown(self):
+        ghq.ask_ollama, ghq.ask_claude = self._models
+        os.environ['JARVIS_JAKE_STEPS'] = 'off'
+        GhqTest.tearDown(self)
+
+    def test_ask_jake_attaches_step(self):
+        n = self.card(title='Install Drive')
+        self.answer = json.dumps({'place': 'rig', 'title': 'Install Google Drive and sign in', 'why': 'Sync needs it',
+                                  'mins': 5, 'steps': ['Open the link', 'Sign in'],
+                                  'button': {'label': 'Download', 'url': 'https://www.google.com/drive/download/'},
+                                  'after': 'approve'})
+        ghq.ask_jake(n, 'Install Google Drive for desktop on the rig')
+        self.assertIn('status:needs-jake', self.labels(n))
+        step = ghq.jake_step_of(n)
+        self.assertEqual(step['place'], 'rig')
+        self.assertEqual(step['steps'], ['Open the link', 'Sign in'])
+        self.assertEqual(step['button']['url'], 'https://www.google.com/drive/download/')
+        self.assertNotIn('ask', step)
+
+    def test_bad_model_answer_becomes_a_question(self):
+        n = self.card(title='Pick a county', pin=True)
+        self.answer = 'not json at all'
+        ghq.ask_jake(n, 'Which county is the fieldwork site in?')
+        step = ghq.jake_step_of(n)
+        self.assertEqual(step['place'], 'phone')
+        self.assertEqual(step['ask'], 'Which county is the fieldwork site in?')
+        self.assertTrue(step['pin'])
+        self.assertEqual(step['after'], 'approve')
+
+    def test_needs_jake_run_attaches_step_and_approval_clears_it(self):
+        n = self.card(title='Measure')
+        self.answer = json.dumps({'place': 'nowhere', 'title': 'Read the meter', 'steps': ['Read it'], 'after': 'close'})
+        ghq.claim(n, 'rig')
+        self.assertEqual(ghq.log_run(n, 'rig', 'needs-jake', summary='Needs a wall meter reading'), 'needs-jake')
+        step = ghq.jake_step_of(n)
+        self.assertEqual(step['place'], 'phone')  # unknown place falls back
+        self.assertEqual(step['after'], 'close')
+        ghq.approve(n, by='test')
+        self.assertIsNone(ghq.jake_step_of(n))
+
+    def test_switch_off(self):
+        os.environ['JARVIS_JAKE_STEPS'] = 'off'
+        n = self.card()
+        ghq.ask_jake(n, 'question')
+        self.assertIsNone(ghq.jake_step_of(n))
 
 
 class CleanPathTest(unittest.TestCase):
