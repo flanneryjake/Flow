@@ -357,6 +357,28 @@ def file_card(kind, what, said):
 
 # ----------------------------------------------------------------------------- one chat turn
 
+TODO_RE = re.compile(r"\b(to-?\s?do|what do i (?:need|have) to do|waiting on me|need(?:s)? me|my list)\b", re.I)
+
+
+def todo_answer(text):
+    """To-do questions: read the board's needs-Jake cards in code. The pinned To-Do page itself isn't readable here."""
+    if not TODO_RE.search(text or ''):
+        return None
+    try:
+        items = gh_cached(f'/repos/{REPO}/issues?state=open&labels=status:needs-jake&per_page=20', ttl=300)
+    except Exception as e:  # noqa: BLE001
+        log(f'todo read failed: {type(e).__name__}')
+        return "I can't see your to-do list from here just now, sir. It's on the pinned To-Do page."
+    items = [i for i in items if 'pull_request' not in i]
+    if not items:
+        return ("Nothing on the task board is waiting on you, sir. Your pinned To-Do page may have a few more; "
+                "I can't read that one.")
+    top = '; '.join(re.sub(r'\s+', ' ', i['title'])[:70] for i in items[:3])
+    more = f', and {len(items) - 3} more' if len(items) > 3 else ''
+    return (f"{len(items)} board item{'s' if len(items) != 1 else ''} waiting on you, sir: {top}{more}. "
+            "The pinned To-Do page has the full list.")
+
+
 def jake_facts():
     """training/jake-facts.md minus its heading and preamble: short standing facts fed every turn."""
     try:
@@ -398,7 +420,7 @@ def chat(text):
             note = ('Filing the card FAILED (GitHub error). Tell Jake it did not get filed and he should try again '
                     'or tell Claude directly.')
 
-    done = None if (fm or note) else (home.act(text, log=log) or home.alarm_answer(text))
+    done = None if (fm or note) else (home.act(text, log=log) or home.alarm_answer(text) or todo_answer(text))
     if done:   # "play jazz", "lights off", "set an alarm for 6": run it through HA, no model needed
         append_turn('assistant', done)
         return {'reply': done, 'humor': humor(), 'filed': None}
