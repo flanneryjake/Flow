@@ -61,6 +61,14 @@ class CardsTest(unittest.TestCase):
         cards.run_node_cards(gh, lambda t, c, a: {'ok': False, 'error': 'rate limit: 10 min apart'}, log=lambda m: None)
         self.assertIn('did not run: rate limit', gh.posted()[0])
 
+    def test_hub_passes_issues_and_report(self):
+        gh, said = FakeGH([]), []
+        cards.run_node_cards(gh, self.call, issues=[{'number': 4, 'body': MARK}], report=lambda n, t: said.append(n),
+                             log=lambda m: None)
+        self.assertEqual(said, [4])
+        self.assertEqual(gh.posted(), [])
+        self.assertNotIn('GET', [m for m, p, b in gh.calls if 'labels=' in p])
+
     def test_unreachable_exception_reported(self):
         def boom(t, c, a):
             raise OSError('down')

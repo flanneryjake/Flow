@@ -48,9 +48,14 @@ def result_text(target, cmd, out):
     return f'{RESULT_MARK}\n{head}\n\n```json\n{detail}\n```'
 
 
-def run_node_cards(gh, call, repo='flanneryjake/jarvis-tasks', log=print, limit=5):
-    """One poll. gh(method, path, body=None) -> parsed JSON; call(target, cmd, args) -> agent reply. Returns cards seen."""
-    issues = gh('GET', f'/repos/{repo}/issues?state=open&labels={LABEL}&per_page={limit}') or []
+def run_node_cards(gh, call, repo='flanneryjake/jarvis-tasks', log=print, limit=5, issues=None, report=None):
+    """One poll. gh(method, path, body=None) -> parsed JSON; call(target, cmd, args) -> agent reply. Returns cards seen.
+
+    The hub passes `issues` from its own ETag'd list call (so an idle queue costs nothing) and `report(n, text)`
+    = ghq.progress, which edits one comment under the E5 breaker; without them this lists and comments itself.
+    """
+    if issues is None:
+        issues = gh('GET', f'/repos/{repo}/issues?state=open&labels={LABEL}&per_page={limit}') or []
     for issue in issues:
         n = issue['number']
         comments = gh('GET', f'/repos/{repo}/issues/{n}/comments?per_page=100') or []
@@ -63,7 +68,10 @@ def run_node_cards(gh, call, repo='flanneryjake/jarvis-tasks', log=print, limit=
                 text = f'{RESULT_MARK}\nNot run: {e}.'
             except Exception as e:  # noqa: BLE001  (unreachable peer, missing key): report, never retry blindly
                 text = f'{RESULT_MARK}\nNot run: {type(e).__name__}.'
-            gh('POST', f'/repos/{repo}/issues/{n}/comments', {'body': text})
+            if report:
+                report(n, text)
+            else:
+                gh('POST', f'/repos/{repo}/issues/{n}/comments', {'body': text})
             log(f'node-cmd #{n}: {text.splitlines()[1][:120]}')
         gh('PATCH', f'/repos/{repo}/issues/{n}', {'state': 'closed', 'state_reason': 'completed'})
     return len(issues)
