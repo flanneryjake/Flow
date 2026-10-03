@@ -5,7 +5,7 @@ description: Work Jake's Jarvis task board (GitHub issues in flanneryjake/jarvis
 
 # Jarvis task board (flanneryjake/jarvis-tasks)
 
-Private GitHub repo of issues. It replaced Notion on 2026-10-02 (Notion is retired; never read or write it). The PCs' Workers poll it (60 s, plus an instant POST /wake) and run approved cards. Jake approves from the phone app Inbox, the To-Do page, or Discord #approvals.
+Private GitHub repo of issues. It replaced Notion on 2026-10-02 (Notion is retired; never read or write it). The PCs' Workers poll it (60 s, plus an instant POST /wake) and run approved cards. Jake approves from the phone app Inbox or the To-Do page (the Discord bot was archived 2026-10-03).
 
 ## Labels
 - Status (exactly one): `status:inbox` (idea, not triaged) -> `status:staged` (waiting for Jake's approval) -> `status:approved` (will run) -> `status:working` (claimed); side states `status:needs-jake`, `status:snoozed`. Closed = done (closed as "not planned" = rejected).

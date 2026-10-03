@@ -1,6 +1,6 @@
 ---
 name: jarvis-morning-report
-description: Build or check Jake's 7 AM Jarvis report email (4 pages: done, to do, numbered ideas, passive-income findings) and turn his numbered email replies into task cards.
+description: Build or check Jake's 7 AM Jarvis report email (3+ pages, more is better: done, to do, numbered ideas, passive-income findings, Worker efficiency) and turn his numbered email replies into task cards.
 ---
 
 # Jarvis 7 AM report
@@ -9,11 +9,14 @@ description: Build or check Jake's 7 AM Jarvis report email (4 pages: done, to d
 - Sent at 7 AM ET daily to flanneryjake240@gmail.com, PLUS jpflannery@recoverysolutions.us on Tue-Sat only (his work days).
 - One PDF/email. Source of truth: the jarvis-tasks board (GitHub), the jarvis-outputs repo, and the Health issues. Never Notion.
 
-## Layout (4 pages)
+## Layout (3 pages MINIMUM; more is better)
+Jake, 2026-10-03: "I prefer more information over less information, so do not be afraid to add extra pages, topics, or summaries." Never trim to fit a page count; overflow onto new pages. He says in his reply what he did and didn't like.
+
 1. **Work completed**: each finished item with the model that drafted it (Jarvis on the rig, Tars on the 5060, Gemini, or Claude), where the output is (link), plus the status of every instruction Jake emailed back the day before, and "Training data added".
 2. **Work still to do**: what's queued or running, by machine and priority, and what is blocked on what. Before listing anything as "waiting on Jake", check it is still true (stale "waiting on Jake" items have burned him before).
 3. **Ideas**, numbered by type: **E#** efficiency, **Q#** product quality, **F#** Fieldwork Clinical, **I#** income.
 4. **Passive-income findings**, numbered **P#**, ranked from the newest jarvis-outputs research/passive-income-new-ideas-*.md.
+5. **Worker efficiency** (daily since 2026-10-03): how the Workers spent their time and Claude usage, from the worker-efficiency analysis in the project files.
 Every idea and finding is tagged **CLAUDE CAN START** (green highlight), **NEEDS JAKE FIRST**, or **STARTED**.
 
 Style: short lines, answer first, ADHD-friendly (most important at the top of each page), links instead of long text.
