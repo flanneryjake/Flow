@@ -251,6 +251,8 @@ class Node:
                 self.nonces.popitem(last=False)
         if cmd not in COMMANDS:
             raise Refused(f'unknown command {cmd!r}')
+        if cmd in (self.cfg.get('disabled') or []):
+            raise Refused(f'{cmd} is not switched on for {self.name} yet')
         rule = find_rule(self.approvals, caller, self.name, cmd)
         if not rule:
             raise Refused(f'approvals.json does not let {caller} run {cmd} on {self.name}')

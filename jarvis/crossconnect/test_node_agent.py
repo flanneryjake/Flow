@@ -149,6 +149,13 @@ class CommandTests(unittest.TestCase):
         self.assertIn('paused', out['error'])
         self.assertEqual(self.run.calls, [])
 
+    def test_disabled_command_refused(self):
+        self.node.cfg['disabled'] = ['restart_pc']
+        code, out = send(self.node, '5060', 'restart_pc')
+        self.assertEqual(code, 403)
+        self.assertIn('not switched on', out['error'])
+        self.assertEqual(self.run.calls, [])
+
     def test_busy_flag_blocks_restart(self):
         busy = os.path.join(self.tmp, 'busy')
         open(busy, 'w').close()
