@@ -150,9 +150,9 @@ def main(argv=None):
     for path, old, new in results:
         if new is None:
             continue
-        with open(f'{path}.bak-{stamp}-we', 'w', encoding='utf-8') as f:
-            f.write(old)
-        with open(path, 'w', encoding='utf-8') as f:
+        eol = '\r\n' if b'\r\n' in open(path, 'rb').read() else '\n'   # keep the file's own line endings
+        shutil.copy2(path, f'{path}.bak-{stamp}-we')
+        with open(path, 'w', encoding='utf-8', newline=eol) as f:
             f.write(new)
     shutil.copy2(os.path.join(HERE, 'repeatguard.py'), guard_dst)
     print(f'Installed (backups *.bak-{stamp}-we). Restart the Jarvis Worker on this PC, and the hub on the 5060.')
