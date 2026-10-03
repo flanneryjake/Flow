@@ -12,6 +12,8 @@ machine, what is being worked on, cards touched in the asked-for window, the mac
 laptop Worker heartbeat and job log. GitHub access is read-only except one thing: "start researching X" or
 "tell Claude X" files a status:inbox card (for:claude on Claude asks); that is decided here in code, never by
 the model.
+"How's the rig", "restart searxng" (then "confirm") and the like go to the cross-connect helpers on each PC
+(fleet.py, signed with this machine's key); restarts always wait for "confirm".
 
 Listens on 127.0.0.1:8790; `tailscale serve` publishes it on the tailnet at http://100.85.255.99:8790 (tailscaled
 handles the inbound side, so no Windows Firewall rule is needed). TARS_BIND=100.85.255.99 binds the tailnet IP
@@ -32,6 +34,7 @@ import urllib.request
 import winreg
 
 import actions
+import fleet
 import home
 import live
 import lookup
@@ -434,7 +437,8 @@ def chat(text):
             note = ('Filing the card FAILED (GitHub error). Tell Jake it did not get filed and he should try again '
                     'or tell Claude directly.')
 
-    done = None if (fm or note) else (home.act(text, log=log) or actions.act(text, log=log) or
+    done = None if (fm or note) else (fleet.act(text, log=log) or home.act(text, log=log) or
+                                      actions.act(text, log=log) or
                                       home.alarm_answer(text) or todo_answer(text))
     if done:   # "play jazz", "lights off", "set an alarm for 6": run it through HA, no model needed
         append_turn('assistant', done)
