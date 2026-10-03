@@ -34,6 +34,12 @@ import home
 import live
 import lookup
 
+try:   # house-rules cards (Flow jarvis/knowledge); optional
+    sys.path.insert(0, os.environ.get('JARVIS_KNOWLEDGE', r'C:\Jarvis\knowledge'))
+    import knowledge
+except Exception:  # noqa: BLE001
+    knowledge = None
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, 'history.jsonl')
 SUMMARY = os.path.join(HERE, 'summary.json')
@@ -418,6 +424,9 @@ def chat(text):
     lv = '' if fm else '\n'.join(x for x in (live.facts(text, log=log), hf) if x)
     if lv:
         ctx.append('LIVE (fresh data; answer from it, do not LOOKUP these):\n' + lv)
+    kn = '' if (fm or hf or knowledge is None) else knowledge.context_for(text)
+    if kn:
+        ctx.append(kn)
     if fx:
         ctx.append('FACTS (live from the task board and this laptop; answer from these, cite card numbers, '
                    'never invent others. "We" and "you" mean the whole Jarvis setup, so say which machine or Claude did what; '
