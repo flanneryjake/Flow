@@ -52,6 +52,8 @@ FACT_Q_RE = re.compile(
     r"championships?|titles?|population|score|banned|legal\s+in|released?|latest\s+version|"
     r"deathtouch|first\s+strike|double\s+strike|trample|lifelink|hexproof|indestructible|"
     r"commander\s+tax|mana\s+value)\b", re.I)
+STREET_RE = re.compile(r"\s+(?:on|at)\s+(?:\d+\s+)?(?:[A-Z][a-z]+\s+){1,3}(?:Place|Way|Street|St|Road|Rd|Avenue|Ave|"
+                       r"Drive|Dr|Plaza|Boulevard|Blvd|Lane|Ln|Highway|Hwy|Parkway|Pkwy)\b\.?")
 STOP = set('the a an is are was were what when where who how why do does did to of in on for at it its and or me my '
            'i you your tonight today tomorrow please jarvis hey can could tell'.split())
 
@@ -236,8 +238,8 @@ def resolve(text, first_reply, answer_with, log=print, today='', check_facts=Tru
     if not kind and check_facts and FACT_Q_RE.search(text or '') and not is_private(text):
         kind, query = 'lookup', text      # check the model's answer against the web before saying it
         checking = True
-    if not kind:
-        return trim(scrub(first_reply))
+    if not kind:   # answered from memory: drop street names it can't have checked
+        return trim(scrub(STREET_RE.sub('', first_reply or '')))
     year = re.search(r'\b(20\d\d)\b', today or '')
     if (kind == 'lookup' and year and not re.search(r'\b(19|20)\d\d\b', query)
             and re.search(r'\b(most\s+recent|latest|last|current|newest|this\s+(?:year|season))\b', query, re.I)):

@@ -357,6 +357,11 @@ def file_card(kind, what, said):
 
 # ----------------------------------------------------------------------------- one chat turn
 
+def _short(title, n=70):
+    title = re.sub(r'\s+', ' ', title).strip()
+    return title if len(title) <= n else title[:n].rsplit(' ', 1)[0].rstrip(',;:-.') + '…'
+
+
 TODO_RE = re.compile(r"\b(to-?\s?do|what do i (?:need|have) to do|waiting on me|need(?:s)? me|my list)\b", re.I)
 
 
@@ -369,14 +374,15 @@ def todo_answer(text):
     except Exception as e:  # noqa: BLE001
         log(f'todo read failed: {type(e).__name__}')
         return "I can't see your to-do list from here just now, sir. It's on the pinned To-Do page."
-    items = [i for i in items if 'pull_request' not in i]
+    items = [i for i in items if 'pull_request' not in i and not any(   # claimed = a machine is already on it
+        n.startswith('claimed') or n == 'status:working' for n in labels(i))]
     if not items:
         return ("Nothing on the task board is waiting on you, sir. Your pinned To-Do page may have a few more; "
                 "I can't read that one.")
-    top = '; '.join(re.sub(r'\s+', ' ', i['title'])[:70] for i in items[:3])
+    top = '; '.join(_short(i['title']) for i in items[:3])
     more = f', and {len(items) - 3} more' if len(items) > 3 else ''
-    return (f"{len(items)} board item{'s' if len(items) != 1 else ''} waiting on you, sir: {top}{more}. "
-            "The pinned To-Do page has the full list.")
+    head = f"{len(items)} board item{'s' if len(items) != 1 else ''} waiting on you, sir: {top}{more}"
+    return head + ('' if head.endswith('…') else '.') + ' The pinned To-Do page has the full list.'
 
 
 def jake_facts():
