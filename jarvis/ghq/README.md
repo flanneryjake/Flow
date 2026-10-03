@@ -144,6 +144,27 @@ What `agent.py` does with it:
 The phone hub's Review/Approvals page lists `ghq.snoozed()` under "Waiting on…", with what each card waits on,
 the card that makes it and how long it has waited, so Jake sees why the card hasn't run without being asked.
 
+## Jake steps (the To-Do list)
+
+Whenever a card stops for Jake (`ask_jake`, a `needs-jake` run, or `send_back` deciding it really is him), ghq also
+writes ONE hidden `<!-- jarvis:jake {...} -->` comment: the card's To-Do item. The phone app's To-Do tab lists these
+grouped by place, and a tick or an answer there comments on the card and sends it on.
+
+| Field | Meaning |
+| --- | --- |
+| `place` | `rig`, `5060`, `phone` or `homework`: where the hands-on part happens |
+| `title`, `why`, `mins` | verb-first title, one line on what it unlocks, honest minutes |
+| `steps` | 3 to 5 short steps, when Jake has to do something |
+| `button` | `{label, url}`: one link to the exact page or folder |
+| `ask` | the question, when the card needs an answer instead of an action |
+| `after` | `approve` (send it back to the Worker) or `close` (the card is only Jake's task) |
+| `pin` | set for `pin` cards: the To-Do tab asks for the PIN before it approves |
+
+A model writes the step from the reason (local Ollama first, then Claude); a bad answer still gives a usable item
+(a question on the phone). Approving the card clears it. `ghq.py jake-step <n> [reason] [--json '{...}']` writes one
+by hand, `ghq.py jake-backfill` gives every needs-jake card without one a step, and `JARVIS_JAKE_STEPS=off` turns
+it off. Read a card's current step with `ghq.jake_step_of(n)`.
+
 ## Phone hub
 
 In the hub, the Approvals list reads
