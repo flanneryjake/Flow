@@ -87,10 +87,10 @@ def test_export_triage_goes_through_intake(ln, tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_TRAINING_DIR", str(tmp_path / "training"))
     rc = ln.export_triage(9, "Card", [{"event": "needs-jake"}], "Why it looped: x", {"action": "close"}, {"outcome": "closed"})
     assert rc == 0
-    files = os.listdir(tmp_path / "training" / "raw")
+    files = os.listdir(tmp_path / "training" / "raw" / "loop-triage")
     assert len(files) == 1 and files[0].startswith("loop-triage-9-")
-    rec = json.load(open(tmp_path / "training" / "raw" / files[0]))
-    assert set(("history", "why", "fix", "result")) <= set(rec)
+    pair = json.loads(open(tmp_path / "training" / "raw" / "loop-triage" / files[0], encoding="utf-8").readline())
+    assert pair["meta"]["result"] == {"outcome": "closed"} and pair["messages"][1]["role"] == "user"   # history in, fix out
     rc = ln.export_triage(9, "Card", [], "token ghp_" + "a" * 36, {}, {})   # guardrails refuse secrets
     assert rc == 1
 
@@ -160,3 +160,77 @@ def test_breaker_blocks_writes_in_request(ghq_fake, ln, monkeypatch):
     with pytest.raises(ghq.GitHubError):
         ghq._breaker("/repos/x/y/issues/88")
     ghq._breaker("/repos/x/y/labels")   # not a card path: never counted
+
+
+# ---------------------------------------------------------------- loop marks, read gate, report, SFT pairs, dates
+
+def test_loop_mark_round_trip_and_read(ln):
+    text, mark = ln.loop_mark_text("It kept asking for photos.csv.", "Made #501 to export it; #500 waits on it.", [501], "Tars (5060) + Claude")
+    cs = [{"id": 7, "body": "older"}, {"id": 8, "body": text}]
+    m = ln.loop_mark_of(cs)
+    assert m["id"] == 8 and m["related"] == [501] and m["why"].startswith("It kept")
+    assert not ln.is_read(500, 8)
+    ln.mark_read(500, 8)
+    assert ln.is_read(500, 8) and not ln.is_read(500, 9)       # a newer loop mark needs a new read
+
+
+def test_report_shape(ln):
+    ln.record(500, "loop", "missing photos.csv", "rig")
+    ln.record(500, "triaged", "the export never ran", "homebase", first_pass_by="Tars (5060)", outcome="snoozed")
+    ln.record(501, "looped", "made for #500", "homebase")
+    ln.record(502, "snoozed", "waits on #12", "rig")
+    tri = {"500": {"verdict": "The export step never ran, so the file never existed", "done": ["created #501"], "title": "Card 500",
+                   "first_pass_by": "Tars (5060)"}}
+    r = ln.report(since="2000-01-01T00:00:00", triage_states=tri)
+    assert set(r) >= {"since", "generated", "day", "counts", "cards", "exile_review"}
+    c = {x["card"]: x for x in r["cards"]}
+    assert c[500]["looped"] and c[500]["reviewed_by"] == ["Tars (5060)", "Claude"]
+    assert c[500]["explanation"].startswith("It looped because the export step never ran")
+    assert len([s for s in c[500]["explanation"].split(". ") if s]) <= 2
+    assert c[502]["held"] and not c[502]["looped"]
+    assert r["counts"]["looped"] == 2
+
+
+def test_sft_pairs_for_tars_and_jarvis(ln):
+    pairs = ln.sft_pairs(500, "Card", [{"at": "2026-10-03", "event": "needs-jake", "text": "missing photos.csv"}],
+                         {"by": "Tars (5060)", "diagnosis": {"why": "x"}}, "Why it looped: the export never ran\nAction: depend",
+                         {"action": "depend", "cards": [{"title": "Export photos.csv"}]}, {"outcome": "snoozed"})
+    assert [p["target"] for p in pairs] == ["tars", "jarvis"]
+    msg = pairs[0]["messages"]
+    assert [m["role"] for m in msg] == ["system", "user", "assistant"]
+    assert json.loads(msg[2]["content"])["why"] == "the export never ran"
+    assert pairs[0]["meta"]["first_pass"]["by"] == "Tars (5060)"
+
+
+def test_export_goes_to_raw_loop_triage(ln, tmp_path, monkeypatch):
+    if not os.path.exists(ln.TRAINING_INTAKE):
+        pytest.skip("training_intake.py not installed on this PC")
+    monkeypatch.setenv("JARVIS_TRAINING_DIR", str(tmp_path / "training"))
+    assert ln.export_triage(9, "Card", [], "Why it looped: x", {"action": "close"}, {"outcome": "closed"}) == 0
+    files = os.listdir(tmp_path / "training" / "raw" / "loop-triage")
+    assert len(files) == 1 and files[0].endswith(".jsonl")
+    lines = open(tmp_path / "training" / "raw" / "loop-triage" / files[0], encoding="utf-8").read().splitlines()
+    assert len(lines) == 2
+
+
+def test_midnight_never_gates_running(ghq_fake, ln, monkeypatch):
+    """A card tagged yesterday still claims and runs today: neither the tag nor the approval date gates anything."""
+    import ghq
+    day1 = dt.datetime(2026, 10, 2, 23, 59).astimezone()
+    monkeypatch.setattr(ln, "_now", lambda: day1)
+    tag1 = ln.daily_tag(42)
+    v1 = ln.check(42, "x", github_bounces=0)
+    day2 = dt.datetime(2026, 10, 3, 0, 1).astimezone()          # past midnight, before the 07:30 roll
+    monkeypatch.setattr(ln, "_now", lambda: day2)
+    assert ln.tag_of(42) == tag1                                  # same report day until the morning report rolls it
+    assert ln.check(42, "x", github_bounces=0) == v1              # the gate doesn't look at dates
+    day2b = dt.datetime(2026, 10, 3, 8, 0).astimezone()           # after the roll
+    monkeypatch.setattr(ln, "_now", lambda: day2b)
+    assert ln.tag_of(42) == "" and ln.daily_tag(43).startswith("00-20261003")
+    # ready() lists the approved card regardless of when (or which day) it was approved
+    monkeypatch.setattr(ghq, "fleet_allows", lambda m: True)
+    monkeypatch.setattr(ghq, "fleet_defers", lambda m: False)
+    card = {"number": 42, "title": "t", "labels": [{"name": "status:approved"}, {"name": "machine:any"}],
+            "created_at": "2026-10-02T23:59:00Z", "pull_request": None}
+    monkeypatch.setattr(ghq, "request", lambda *a, **k: (200, [card], {}))
+    assert [c["number"] for c in ghq.ready("homebase")] == [42]

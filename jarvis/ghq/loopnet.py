@@ -37,7 +37,10 @@ MACHINE_FILE = r"C:\Jarvis\watchdog\machine.txt"
 TRAINING_INTAKE = r"C:\Jarvis\guardrails\training_intake.py"
 BREAKER_WRITES = int(os.environ.get("JARVIS_BREAKER_WRITES", "40"))   # GitHub writes per card per hour
 AUTO_ROLL = (7, 30)   # if no morning report rolled the tag by 07:30 local, the first call after that rolls it
-EVENTS = ("approved", "claimed", "needs-jake", "snoozed", "loop", "done", "triaged")
+EVENTS = ("approved", "claimed", "needs-jake", "snoozed", "loop", "done", "triaged", "looped", "read", "exile-review")
+LOOP_RE = re.compile(r"<!-- jarvis:loop (\{.*?\}) -->", re.S)
+LOOPED = "looped"   # label: this card went through a loop; Jake must open the summary before acting on it
+TRAIN_DIR_NAME = "loop-triage"   # C:\Jarvis\training\raw\loop-triage\
 
 
 def enabled():
@@ -314,31 +317,142 @@ def note_write(n, alert=None):
     return c
 
 
-# ---------------------------------------------------------------- training export
+# ---------------------------------------------------------------- loop marker ("looped" label + plain summary Jake must read)
 
-def export_triage(n, title, history_rows, why, fix, result, source="loop triage", by="claude"):
-    """One training example per loop triage, through the guardrailed intake (refused if it carries secrets).
-    Returns the intake exit code (0 added, 1 refused, 2 bad input) or None when intake isn't installed here."""
+def loop_mark_text(why, changed, related=(), by=""):
+    mark = {"why": str(why or "").strip()[:600], "changed": str(changed or "").strip()[:600],
+            "related": sorted({int(x) for x in related or []}), "by": by, "at": _now().isoformat(timespec="seconds")}
+    rel = (" Related: " + ", ".join(f"#{x}" for x in mark["related"]) + ".") if mark["related"] else ""
+    return (f"<!-- jarvis:loop {json.dumps(mark, ensure_ascii=False)} -->\n**Looped.** {mark['why']} "
+            f"**What changed:** {mark['changed']}{rel}"), mark
+
+
+def loop_mark_of(comments):
+    """The newest loop summary on a card: {why, changed, related, by, at, id} or None."""
+    found = None
+    for c in comments:
+        m = LOOP_RE.search(c.get("body") or "")
+        if m:
+            try:
+                found = {**json.loads(m.group(1)), "id": c.get("id")}
+            except ValueError:
+                pass
+    return found
+
+
+def mark_read(n, mark_id, by="jake"):
+    """Jake opened the loop summary: recorded in the ledger (the app's approve / To-Do tick unlock after this)."""
+    return record(n, "read", "", "phone", mark=int(mark_id or 0), by=by)
+
+
+def is_read(n, mark_id, rows=None):
+    rows = history(n) if rows is None else rows
+    return any(r.get("event") == "read" and int(r.get("mark") or 0) == int(mark_id or 0) for r in rows)
+
+
+# ---------------------------------------------------------------- training export (SFT pairs for Tars and Jarvis)
+
+SFT_SYSTEM = ("You are {who}, a Jarvis Worker model. A task card was rejected or came back for Jake again (a loop). "
+              "Read the card and its history, say in plain words why it looped, and pick ONE fix: fix the done-condition "
+              "and re-approve, snooze it on what it really waits for, create the dependency cards it needs first, write "
+              "one clear step for Jake, or close it. Answer with JSON: {{\"why\": ..., \"action\": {{...}}}}.")
+
+
+def sft_pairs(n, title, history_rows, first_pass, verdict_text, fix, result):
+    """Supervised pairs (chat format) teaching Tars and Jarvis to handle a rejection themselves. The answer is the
+    final, Claude-reviewed fix - the local model's own first pass goes in meta so the gap can be studied."""
+    hist = "\n".join(f"- {h.get('at', '')[:16]} {h.get('event')}: {str(h.get('text', ''))[:300]}" for h in history_rows[-25:])
+    user = f"Card #{int(n)}: {title}\n\nHistory (oldest first):\n{hist or '- (none)'}"
+    why = next((ln.split(":", 1)[1].strip() for ln in str(verdict_text).splitlines() if ln.lower().startswith("why it looped")), "")
+    answer = json.dumps({"why": why or str(verdict_text)[:400], "action": fix}, ensure_ascii=False)
+    meta = {"card": int(n), "tag": tag_of(n), "first_pass": first_pass, "result": result,
+            "at": _now().isoformat(timespec="seconds"), "source": "loop triage (Claude-reviewed)"}
+    return [{"messages": [{"role": "system", "content": SFT_SYSTEM.format(who=who)}, {"role": "user", "content": user},
+                          {"role": "assistant", "content": answer}], "target": key, "meta": meta}
+            for key, who in (("tars", "Tars (the 5060's model)"), ("jarvis", "Jarvis (the rig's model)"))]
+
+
+def export_triage(n, title, history_rows, why, fix, result, source="loop triage", by="claude", first_pass=None):
+    """Training data for each loop triage, through the guardrailed intake (refused whole if it carries secrets or
+    patient ids): one .jsonl of SFT pairs in C:\\Jarvis\\training\\raw\\loop-triage\\. Jake pre-approved adding
+    training data; this never starts a fine-tune. Returns the intake exit code (0 added, 1 refused, 2 bad input),
+    or None when intake isn't installed here."""
     if not os.path.exists(TRAINING_INTAKE):
         return None
-    rec = {"type": "loop-triage", "card": int(n), "title": str(title)[:200], "tag": tag_of(n),
-           "history": history_rows[-40:], "why": str(why)[:2000], "fix": fix, "result": result,
-           "at": _now().isoformat(timespec="seconds")}
     d = tempfile.mkdtemp(prefix="loopnet-")
-    path = os.path.join(d, f"loop-triage-{int(n)}-{_now():%Y%m%d-%H%M%S}.json")
+    sub = os.path.join(d, TRAIN_DIR_NAME)
+    os.makedirs(sub)
+    path = os.path.join(sub, f"loop-triage-{int(n)}-{_now():%Y%m%d-%H%M%S}.jsonl")
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(rec, f, ensure_ascii=False, indent=1)
+        for p in sft_pairs(n, title, history_rows, first_pass, why, fix, result):
+            f.write(json.dumps(p, ensure_ascii=False) + "\n")
     try:
-        p = subprocess.run([sys.executable, TRAINING_INTAKE, "add", path, "--topic", "raw", "--source", f"{source} #{int(n)}",
+        p = subprocess.run([sys.executable, TRAINING_INTAKE, "add", d, "--topic", "raw", "--source", f"{source} #{int(n)}",
                             "--by", by], capture_output=True, text=True, timeout=60,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return p.returncode
     finally:
         try:
             os.remove(path)
+            os.rmdir(sub)
             os.rmdir(d)
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------- morning-report data (/api/loopnet/report)
+
+EXILE_REVIEW = os.path.join(HOME, "exile-review.json")
+
+
+def _two_sentences(text, limit=320):
+    parts = re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", str(text or "")).strip())
+    out = " ".join(parts[:2]).strip()
+    return out if len(out) <= limit else out[:limit].rsplit(" ", 1)[0] + "..."
+
+
+def report(since=None, triage_states=None, titles=None):
+    """Held, looped and model-reviewed cards since the last morning report (or `since`), each with a 2-sentence plain
+    explanation and who reviewed it, plus the latest exile review. JSON shape documented in RIG-SETUP-loopnet.md."""
+    st = _read_json(DAILY, {})
+    since = since or st.get("rolled_at") or (_now() - dt.timedelta(hours=24)).isoformat(timespec="seconds")
+    rows = [r for r in _local_rows() if r.get("at", "") >= since]
+    tri = triage_states or {}
+    titles = titles or {}
+    cards = {}
+    for r in rows:
+        n = r["card"]
+        c = cards.setdefault(n, {"card": n, "title": titles.get(n, ""), "events": [], "reviewed_by": [], "explanation": "",
+                                 "outcome": "", "looped": False, "held": False})
+        c["events"].append(r["event"])
+        if r["event"] in ("loop", "triaged", "looped"):
+            c["looped"] = True
+        if r["event"] in ("snoozed", "loop"):
+            c["held"] = True
+        if r["event"] == "triaged":
+            c["outcome"] = r.get("outcome", "")
+            for who in (r.get("first_pass_by"), "Claude"):
+                if who and who not in c["reviewed_by"]:
+                    c["reviewed_by"].append(who)
+        if r.get("reason") and not c["explanation"]:
+            c["explanation"] = _two_sentences(r["reason"])
+    for n, c in cards.items():
+        t = tri.get(str(n)) or {}
+        if t.get("verdict"):
+            v = t["verdict"].strip().rstrip(".")
+            v = v[:1].lower() + v[1:] if v[:2] != v[:2].upper() else v   # "The Worker ..." -> "the Worker ...", keeps "PIN"
+            c["explanation"] = _two_sentences(f"It looped because {v}. " +
+                                              (f"Fix: {'; '.join(t.get('done') or [])}." if t.get("done") else ""))
+            c["outcome"] = c["outcome"] or t.get("outcome", "")
+            c["title"] = c["title"] or t.get("title", "")
+            if t.get("first_pass_by") and t["first_pass_by"] not in c["reviewed_by"]:
+                c["reviewed_by"].insert(0, t["first_pass_by"])
+    items = [c for c in cards.values() if c["looped"] or c["held"] or c["reviewed_by"]]
+    items.sort(key=lambda c: (not c["looped"], c["card"]))
+    return {"since": since, "generated": _now().isoformat(timespec="seconds"), "day": st.get("day"),
+            "counts": {"looped": sum(c["looped"] for c in items), "held": sum(c["held"] for c in items),
+                       "reviewed": sum(bool(c["reviewed_by"]) for c in items)},
+            "cards": items, "exile_review": _read_json(EXILE_REVIEW, {})}
 
 
 # ---------------------------------------------------------------- status (hub /api/loopnet/status, morning report)
