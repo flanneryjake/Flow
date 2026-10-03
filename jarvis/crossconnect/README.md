@@ -10,10 +10,11 @@ command needs his words again. Deleting, spending, posting, and widening `approv
 | --- | --- |
 | `node_agent.py` | The agent. `GET /health` (no auth), `POST /cmd` (signed, approved, rate limited, audited) |
 | `client.py` | Sign and send one command: `python client.py junk restart_service --name searxng` |
+| `cards.py` | Command cards: an open `node-cmd` card with a `jarvis:nodecmd` marker runs once, gets one result comment, closes |
 | `approvals.json` | Who may run what on whom, and how often. Default deny |
 | `examples/node.*.json` | Per-machine config: tailnet bind address, services, wake routes, fixes, logs |
 | `pubkeys/<node>.pub` | Each machine's PUBLIC key. Private keys never leave their machine |
-| `test_node_agent.py` | 22 tests; the command runner is a recorder, so nothing is ever restarted |
+| `test_node_agent.py`, `test_cards.py` | 30 tests; the command runner is a recorder, so nothing is ever restarted |
 | `sandbox-test.cmd` | The Docker sandbox run on the rig (Jake's rule for medium-risk code) |
 
 ## Commands
