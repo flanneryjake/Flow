@@ -90,11 +90,25 @@ def is_change(c):
     return (body.startswith(JAKE_ACTION_PREFIXES) or body.startswith(CHANGE_PREFIXES))
 
 
+def ask_time(c):
+    """When the ask was made. A run record's own `ended` time wins: with E8 the run record is the claim comment edited
+    in place, so its created_at is when the run started."""
+    m = RUNMETA_RE.search(c.get('body') or '')
+    if m:
+        try:
+            ended = _t(json.loads(m.group(1)).get('ended'))
+            if ended:
+                return ended
+        except ValueError:
+            pass
+    return _t(c.get('created_at'))
+
+
 def last_ask(comments):
     """(index, time) of the latest ask, or (None, None)."""
     for i in range(len(comments) - 1, -1, -1):
         if is_ask(comments[i].get('body') or ''):
-            return i, _t(comments[i].get('created_at'))
+            return i, ask_time(comments[i])
     return None, None
 
 
