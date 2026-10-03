@@ -264,7 +264,8 @@ def notify(message, cfg, post=_post):
     if not message:
         return 'What should the notification say, sir?'
     try:
-        post(cfg['notify_url'], {'title': 'Jarvis', 'body': message[:300]}, cfg.get('notify_headers'))
+        post(cfg['notify_url'], {'title': 'Jarvis', 'body': message[:200], 'source': 'tars'},
+             cfg.get('notify_headers'))
     except Exception as e:  # noqa: BLE001
         audit(f'notify FAILED {type(e).__name__}')
         return "The hub didn't take the notification, sir."
