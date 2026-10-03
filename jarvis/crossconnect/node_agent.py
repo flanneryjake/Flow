@@ -214,11 +214,12 @@ def _uptime_h():
 
 
 class Node:
-    def __init__(self, config, approvals, peer_keys, state_dir, runner=None, wol=None, opener=None):
+    def __init__(self, config, approvals, peer_keys, state_dir, runner=None, wol=None, opener=None, pubkeys_dir=None):
         self.cfg = config
         self.name = config['node']
         self.approvals = approvals
         self.peer_keys = peer_keys       # {caller: public key base64}
+        self.pubkeys_dir = pubkeys_dir   # re-read when an unknown caller shows up, so a new peer needs no restart
         self.state_dir = state_dir
         os.makedirs(state_dir, exist_ok=True)
         self.limits = Limits(os.path.join(state_dir, 'limits.json'))
@@ -238,6 +239,9 @@ class Node:
             raise Refused('body is not JSON')
         caller, cmd = req.get('caller'), req.get('cmd')
         key = self.peer_keys.get(caller)
+        if not key and self.pubkeys_dir:
+            self.peer_keys = load_public_keys(self.pubkeys_dir)
+            key = self.peer_keys.get(caller)
         if not key or not sig or not signature_ok(key, body, sig):
             raise Refused('bad signature or unknown caller')
         if abs(time.time() - float(req.get('ts') or 0)) > SKEW_S:
@@ -432,7 +436,7 @@ def main(argv=None):
         print(pub)
         return
     cfg = load_json(a.config)
-    node = Node(cfg, load_json(a.approvals), load_public_keys(a.pubkeys), a.state)
+    node = Node(cfg, load_json(a.approvals), load_public_keys(a.pubkeys), a.state, pubkeys_dir=a.pubkeys)
     bind = cfg.get('bind')
     if not bind or not bind.startswith('100.'):
         sys.exit('node.json "bind" must be this machine\'s tailnet address (100.x.y.z); refusing to listen elsewhere')

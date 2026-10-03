@@ -276,6 +276,19 @@ class HttpTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             na.main(['--make-key', 'rig', '--self-key', path])
 
+    def test_new_peer_key_picked_up_without_restart(self):
+        folder = os.path.join(self.tmp, 'pk')
+        os.makedirs(folder)
+        node, tmp = make_node(pubkeys_dir=folder)
+        try:
+            node.peer_keys = {}
+            self.assertEqual(send(node, 'rig', 'status')[0], 403)
+            with open(os.path.join(folder, 'rig.pub'), 'w') as f:
+                f.write(PUBLIC['rig'])
+            self.assertEqual(send(node, 'rig', 'status')[0], 200)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_json_with_bom_loads(self):
         path = os.path.join(self.tmp, 'bom.json')
         with open(path, 'wb') as f:
