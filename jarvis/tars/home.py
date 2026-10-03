@@ -79,8 +79,9 @@ def facts(text):
         w = _when(snap.get(key))
         if w:
             lines.append(f'Next alarm on the {room} Echo: {w}.')
-    if not lines:
-        lines.append('No alarms are set on the Echos.')
+    if not lines:   # Alexa Media reports "unknown" both when nothing is set and when it can't read the alarms
+        lines.append('No upcoming alarm is showing on the Echos (Home Assistant shows none, or cannot read them right '
+                     'now). Work-day alarms (Tue-Sat) are set automatically at 9 PM the night before.')
     for ent, e in (snap.get('echos') or {}).items():
         room = 'bedroom' if 'bedroom' in ent else 'kitchen'
         if e.get('state') == 'playing' and e.get('title'):

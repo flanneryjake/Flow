@@ -53,5 +53,12 @@ class HomeTest(unittest.TestCase):
         self.assertEqual(home.facts('capital of australia'), '')
 
 
+    def test_unknown_alarm_is_not_no_alarm(self):
+        home.save_snapshot({'home_url': URL, 'next_alarm_bedroom': 'unknown', 'next_alarm_kitchen': 'unavailable'})
+        f = home.facts("what's my alarm set for")
+        self.assertIn('cannot read them', f)
+        self.assertNotIn('No alarms are set', f)
+
+
 if __name__ == '__main__':
     unittest.main()
