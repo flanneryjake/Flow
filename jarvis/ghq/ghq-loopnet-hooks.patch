@@ -1,0 +1,219 @@
+--- a/jarvis/ghq/ghq.py
++++ b/jarvis/ghq/ghq.py
+@@ -166,6 +166,45 @@
+                                                  headers.get('x-ratelimit-remaining')) == '0'
+ 
+ 
++def _loopnet():
++    """The loop net module (loopnet.py next to this file), or None if it's missing or switched off. Never raises."""
++    try:
++        here = os.path.dirname(os.path.abspath(__file__))
++        if here not in sys.path:
++            sys.path.insert(0, here)
++        import loopnet
++        return loopnet if loopnet.enabled() else None
++    except Exception:  # noqa: BLE001
++        return None
++
++
++_ISSUE_PATH_RE = re.compile(r'/issues/(\d+)(?:/|$)')
++
++
++def _breaker_alert(number, count):
++    try:   # one push through the hub (localhost on homebase; elsewhere the alert is just the ledger row)
++        req = urllib.request.Request('http://127.0.0.1:8770/api/notify', method='POST', data=json.dumps({
++            'title': f'GitHub breaker: #{number}', 'source': 'loopnet', 'url': f'/#inbox/review/{number}',
++            'body': f'Needs Jake: #{number} made {count} GitHub writes this hour, so writes to it are paused until the '
++                    'hour turns over. It is probably looping.'}).encode(), headers={'Content-Type': 'application/json'})
++        urllib.request.urlopen(req, timeout=5).read()
++    except Exception:  # noqa: BLE001
++        pass
++
++
++def _breaker(path):
++    m = _ISSUE_PATH_RE.search(path)
++    ln = _loopnet() if m else None
++    if not ln:
++        return
++    try:
++        ln.note_write(int(m.group(1)), alert=_breaker_alert)
++    except ln.BreakerOpen as e:
++        raise GitHubError(str(e))
++    except Exception:  # noqa: BLE001 - a broken breaker file must never stop GitHub writes
++        pass
++
++
+ def request(method, path, body=None, etag=None, graphql=False):
+     """Call the GitHub REST API. Returns (status, data, headers). 304 returns (304, None, headers).
+     Raises RateLimited, without calling GitHub, while a rate-limit cooldown is running."""
+@@ -173,6 +212,7 @@
+     if left > 0:
+         raise RateLimited(f'GitHub rate limit: waiting {int(left)} s more before {method} {path}')
+     if method != 'GET':
++        _breaker(path)   # loop net (10/03): too many writes on one card this hour -> refuse (GitHubError)
+         gap = WRITE_GAP - (time.time() - _LAST_WRITE[0])
+         if gap > 0:
+             time.sleep(gap)
+@@ -526,6 +566,9 @@
+         api('DELETE', repo_path(f'/issues/comments/{mine["id"]}'))
+         return False
+     set_status(number, 'working', extra_add=[f'claimed:{machine}'], extra_remove=['resume'])
++    ln = _loopnet()
++    if ln:
++        ln.record(number, 'claimed', machine=machine)
+     return True
+ 
+ 
+@@ -686,7 +729,11 @@
+     set_status(number, 'approved', extra_remove=[f'claimed:{m}' for m in MACHINES])
+     if current.get('state') == 'closed':
+         api('PATCH', repo_path(f'/issues/{number}'), {'state': 'open'})
+-    comment(number, f'Approved via {by} at {now_iso()}\n{RESET_MARK}', dedupe=False)
++    ln = _loopnet()
++    tag = ln.daily_tag(number) if ln else ''   # NN-YYYYMMDD: a friendly daily label, never the identity
++    comment(number, f'Approved via {by} at {now_iso()}' + (f" (today's tag {tag})" if tag else '') + f'\n{RESET_MARK}', dedupe=False)
++    if ln:
++        ln.record(number, 'approved', by=by)
+     wake()
+ 
+ 
+@@ -785,7 +832,10 @@
+       machine  value is a PC name ('rig', 'homebase', ...) whose health issue must have checked in recently
+       time     value is an ISO time (UTC if no zone) that must have passed
+ 
+-    `machine` is the PC whose Worker checks the condition (for a file, the PC the file lands on)."""
++    `machine` is the PC whose Worker checks the condition (for a file, the PC the file lands on).
++    kind 'all' / 'any' (the if / and / or gate, 10/03): value is a list of {kind, value} conditions; see snooze_until_gate."""
++    if kind in GATE_KINDS:
++        return snooze_until_gate(number, kind, value, machine, reason)
+     if kind not in SNOOZE_KINDS:
+         raise ValueError(f'snooze kind must be one of {SNOOZE_KINDS}')
+     if kind == 'file':
+@@ -845,6 +895,64 @@
+     return value
+ 
+ 
++GATE_KINDS = ('all', 'any')
++
++
++def _gate_condition(number, c, machine):
++    """Check and normalise one condition of an all/any gate. Returns (condition, already_met)."""
++    kind = str(c.get('kind') or '').strip()
++    value = c.get('value')
++    if kind in GATE_KINDS:   # nesting: all of [file X, any of [card #3, after 9 PM]]
++        subs = [_gate_condition(number, s, machine) for s in (value or [])]
++        if not subs:
++            raise ValueError(f'empty {kind} gate')
++        met = all(m for _, m in subs) if kind == 'all' else any(m for _, m in subs)
++        return {'kind': kind, 'value': [s for s, _ in subs]}, met
++    if kind not in SNOOZE_KINDS:
++        raise ValueError(f'gate condition kind must be one of {SNOOZE_KINDS + GATE_KINDS}')
++    if kind == 'file':
++        value = clean_path(value)
++        if not _is_full_path(value):
++            raise ValueError(f'gate file condition needs a full path, got "{value}"')
++        return {'kind': 'file', 'value': value}, os.path.exists(value)
++    if kind == 'card':
++        value = int(str(value).lstrip('#'))
++        if value == number:
++            raise ValueError('a card cannot wait on itself')
++        return {'kind': 'card', 'value': value}, api('GET', repo_path(f'/issues/{value}')).get('state') == 'closed'
++    if kind == 'machine':
++        value = machine_name(value)
++        return {'kind': 'machine', 'value': value}, False
++    when = _parse_iso(value).replace(microsecond=0)
++    return {'kind': 'time', 'value': when.isoformat()}, when <= dt.datetime.now(dt.timezone.utc)
++
++
++def _gate_text(c):
++    if c['kind'] in GATE_KINDS:
++        return '(' + (' AND ' if c['kind'] == 'all' else ' OR ').join(_gate_text(s) for s in c['value']) + ')'
++    return {'file': 'file `{}`', 'card': '#{} done', 'machine': '{} online', 'time': 'after {}'}[c['kind']].format(c['value'])
++
++
++def snooze_until_gate(number, kind, conditions, machine, reason=''):
++    """The if / and / or gate: park a card until ALL (kind 'all') or ANY (kind 'any') of `conditions` are met, e.g.
++        snooze_until(42, 'all', [{'kind': 'file', 'value': r'D:\\out\\photos.csv'},
++                                 {'kind': 'any', 'value': [{'kind': 'card', 'value': 12}, {'kind': 'time', 'value': '2026-10-04T01:00Z'}]}],
++                     'rig', 'waits on the photo export and either card #12 or 9 PM')
++    Never asks Jake; wake_snoozed() re-approves it when the gate opens. Returns the stored gate."""
++    gate, met = _gate_condition(number, {'kind': kind, 'value': list(conditions or [])}, machine)
++    if met:
++        raise ValueError(f'the gate {_gate_text(gate)} is already open, so there is nothing to wait for')
++    meta = {'kind': gate['kind'], 'value': gate['value'], 'machine': machine, 'since': now_iso(), 'producer': None}
++    set_status(number, 'snoozed', extra_remove=[f'claimed:{m}' for m in MACHINES] + ['resume'])
++    comment(number, f'<!-- jarvis:snooze {json.dumps(meta)} -->\n**Snoozed until {_gate_text(gate)}**' +
++                    (f'\n\n{reason.strip()}' if reason else '') +
++                    '\n\nIt goes back to approved by itself when that happens. No action needed from Jake.', dedupe=False)
++    ln = _loopnet()
++    if ln:
++        ln.record(number, 'snoozed', reason, machine, gate=_gate_text(gate))
++    return gate
++
++
+ def snooze_until_file(number, path, machine, reason='', producer=None):
+     """Park a card until `path` exists on `machine`; never asks Jake.
+ 
+@@ -904,6 +1012,9 @@
+ def condition_met(s, exists=os.path.exists, closed=None):
+     """`closed`: optional set of recently closed card numbers, so a sweep checks every card condition with one call."""
+     kind, value = s.get('kind'), s.get('value')
++    if kind in GATE_KINDS:   # the if / and / or gate: nested conditions
++        results = (condition_met(c, exists, closed) for c in (value or []))
++        return all(results) if kind == 'all' else any(results)
+     if kind == 'file':
+         return bool(value) and (exists(value) or exists(clean_path(value)))  # older records kept descriptions
+     if kind == 'card':
+@@ -923,8 +1034,10 @@
+     numbers woken. Costs one list call plus, when a card waits on another card, one closed-cards call."""
+     mine = [s for s in snoozed(machine) if s['kind'] and s['machine'] == machine]
+     closed = None
+-    if any(s['kind'] == 'card' for s in mine):
+-        since = min(s['since'] or now_iso() for s in mine if s['kind'] == 'card')
++    def _waits_on_card(c):
++        return c.get('kind') == 'card' or (c.get('kind') in GATE_KINDS and any(_waits_on_card(x) for x in c.get('value') or []))
++    if any(_waits_on_card(s) for s in mine):
++        since = min(s['since'] or now_iso() for s in mine if _waits_on_card(s))
+         since = (_parse_iso(since) - dt.timedelta(days=7)).isoformat()  # also catch cards closed just before
+         closed = {i['number'] for i in paged(repo_path('/issues?state=closed&since=' + urllib.parse.quote(since)))}
+     woken = []
+@@ -1055,12 +1168,39 @@
+     return r.stdout
+ 
+ 
++TRIAGE_MARK = '<!-- jarvis:triage -->'
++
++
++def park_for_triage(number, machine, reason, verdict=None):
++    """LOOP: snooze + unclaim the card and label it for the hub's triage lane (triage + needs-claude-review).
++    Jake is not asked. Works from any PC: it is only labels and one comment on GitHub."""
++    issue = api('GET', repo_path(f'/issues/{number}'))
++    keep = [n for n in label_names(issue) if not n.startswith(('claimed:', 'status:'))]
++    api('PUT', repo_path(f'/issues/{number}/labels'),
++        {'labels': keep + ['status:snoozed'] + [x for x in ('triage', 'needs-claude-review') if x not in keep]})
++    v = verdict or {}
++    comment(number, f'{TRIAGE_MARK}\nLoop net: #{number} came back for Jake again ({v.get("bounces", "?")} time(s) before'
++                    + (', same reason' if v.get('same_reason') else '') + '), so it went to Claude for loop triage instead '
++                    f'of to Jake. Worker on {machine} said: {str(reason).strip()[:500]}', dedupe=False)
++
++
+ def send_back(number, machine, reason, models=None):
+     """Use instead of ask_jake whenever a Worker would send a card back to Jake.
+ 
+     Asks the models in turn (default: local Ollama, then Claude) what the card waits on. Snoozes it on that, or
+     asks Jake only when the blocker really is him, or when the card has already been snoozed MAX_SNOOZES times
+     and is still stuck, or no model gave a usable answer. Returns ('snoozed', kind, value) or ('needs-jake',)."""
++    # Loop net (Jake 10/03): a card that already came back for Jake once never reaches him again; it is parked for
++    # Claude's loop triage instead (the hub's triage lane picks up the `triage` label within 2 minutes).
++    ln = _loopnet()
++    if ln:
++        try:
++            v = ln.gate(number, machine, reason)
++        except Exception:  # noqa: BLE001
++            v = {'verdict': 'first'}
++        if v.get('verdict') == 'loop':
++            park_for_triage(number, machine, reason, v)
++            return ('loop',)
+     models = models if models is not None else [ask_ollama, ask_claude]
+     hist = bounce_history(number)
+     if sum(1 for h in hist if h['event'] == 'snoozed') >= MAX_SNOOZES:
