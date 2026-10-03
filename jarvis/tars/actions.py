@@ -309,3 +309,25 @@ def act(text, log=print):
         audit(f'FAILED {type(e).__name__} for: {t[:80]}')
         return "That didn't work, sir. It's in the actions log."
     return None
+
+
+def main(argv):
+    """`python actions.py file-media [--dry-run]`: run the filer from a scheduled task (the rig's media library)."""
+    if argv[:1] != ['file-media']:
+        print('usage: python actions.py file-media [--dry-run]')
+        return 2
+    cfg = config()
+    if not (cfg['media'].get('inbox') and (cfg['media'].get('movies') or cfg['media'].get('tv'))):
+        print('actions.json has no media folders')
+        return 1
+    moved, skipped = file_media(cfg, dry_run='--dry-run' in argv)
+    for m in moved:
+        print(('would move: ' if '--dry-run' in argv else 'moved: ') + m)
+    for s in skipped:
+        print('skipped: ' + s)
+    return 0
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,8 @@
+{
+  "media": {
+    "inbox": ["E:\\Media\\Incoming"],
+    "movies": "E:\\Media\\Movies",
+    "tv": "E:\\Media\\TV Shows",
+    "min_mb": 50
+  }
+}
