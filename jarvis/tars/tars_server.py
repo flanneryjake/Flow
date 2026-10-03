@@ -31,6 +31,7 @@ import urllib.parse
 import urllib.request
 import winreg
 
+import actions
 import home
 import live
 import lookup
@@ -433,7 +434,8 @@ def chat(text):
             note = ('Filing the card FAILED (GitHub error). Tell Jake it did not get filed and he should try again '
                     'or tell Claude directly.')
 
-    done = None if (fm or note) else (home.act(text, log=log) or home.alarm_answer(text) or todo_answer(text))
+    done = None if (fm or note) else (home.act(text, log=log) or actions.act(text, log=log) or
+                                      home.alarm_answer(text) or todo_answer(text))
     if done:   # "play jazz", "lights off", "set an alarm for 6": run it through HA, no model needed
         append_turn('assistant', done)
         return {'reply': done, 'humor': humor(), 'filed': None}
