@@ -27,4 +27,4 @@ Jake wants audits EXTREMELY thorough: fix root causes, verify end to end, and ne
 - Fix it yourself through Remote Control (jarvis-dispatch skill). Back up every file you change (`.bak-YYYYMMDD-<reason>`).
 - Don't restart the hub or Worker on the backup. Don't force-restart the 5060.
 - Risky code: rig Docker sandbox first (jarvis-risk-and-sandbox skill).
-- Report: what was wrong (root cause), what you changed, how you verified it. Anything left for Jake goes on his To-Do page (jake-todo-list skill), not as a new list.
+- Report: what was wrong (root cause), what you changed, how you verified it. Anything left for Jake goes in his To-Do tab as a card step (jake-todo-list skill), not as a new list.
