@@ -30,7 +30,7 @@ Tailnet domain: `tail3bbcb8.ts.net`. Tailscale key expiry is off on all machines
 - Hub, agent and waker run ELEVATED: a full restart needs admin (see the jarvis-dispatch skill for the self-elevating .cmd trick).
 
 ## Services on the rig
-- Ollama model `jarvis` (qwen3.6:35b, Iron Man JARVIS persona). Local lane routes free, text-only, non-clinical cards to it first (off switch: user env JARVIS_LOCAL_LANE=off).
+- Ollama model `jarvis` (qwen3.6:35b, JARVIS persona, Paul Bettany voice). Local lane routes free, text-only, non-clinical cards to it first (off switch: user env JARVIS_LOCAL_LANE=off).
 - Worker agent: Desktop\Claude\jarvis-rig\jarvis-agent\agent.py (Startup "Jarvis Agent.lnk").
 - "Hey Jarvis" mic listener C:\Jarvis\rig-voice (:8796 via tailscale serve) -> Tars -> Kitchen Echo.
 - Docker sandbox: C:\Jarvis\sandbox\sandbox.ps1 (see jarvis-risk-and-sandbox skill).
