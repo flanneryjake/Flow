@@ -24,7 +24,7 @@ from node_agent import PORT, load_private, sign  # noqa: E402
 
 PEERS = {   # node name -> tailnet address; the same names approvals.json uses
     '5060': '100.85.255.99',
-    'rig': 'desktop-vllddm4',
+    'rig': '100.96.134.64',
     'junk': '100.90.201.22',
     'hal9000': 'hal9000',
 }
