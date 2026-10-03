@@ -238,6 +238,10 @@ def resolve(text, first_reply, answer_with, log=print, today='', check_facts=Tru
         checking = True
     if not kind:
         return trim(scrub(first_reply))
+    year = re.search(r'\b(20\d\d)\b', today or '')
+    if (kind == 'lookup' and year and not re.search(r'\b(19|20)\d\d\b', query)
+            and re.search(r'\b(most\s+recent|latest|last|current|newest|this\s+(?:year|season))\b', query, re.I)):
+        query = f'{query} {year.group(1)}'   # pull current pages, not the ones the model already remembers
     src, facts = find(kind, query, private=is_private(text) or is_private(query), log=log)
     if not src:
         return ("I couldn't get a straight answer from the web or from Claude just now, sir. "
@@ -246,7 +250,8 @@ def resolve(text, first_reply, answer_with, log=print, today='', check_facts=Tru
         return scrub(re.sub(r'\s+', ' ', facts))[:600]
     label = {'searx': 'a web search', 'gemini': 'Gemini', 'claude': 'Claude'}[src]
     note = (f'LOOKUP RESULT from {label} for "{query}":\n{facts}\n\nAnswer Jake now from this result in 1-3 spoken '
-            'sentences, in character. Give the actual answer; mention the source only if it matters. Do not output '
+            'sentences, in character. This result is newer than anything you remember: where it differs from your '
+            'memory, the result wins. Give the actual answer; mention the source only if it matters. Do not output '
             'LOOKUP or ASK_CLAUDE again and do not say you don\'t know. Only state numbers, times, scores and dates '
             'that appear in the result; if the exact one isn\'t there, say what the result does show and that you '
             'couldn\'t confirm the rest. Work out "yesterday" or "last night" from the dates in the result'

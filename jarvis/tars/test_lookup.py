@@ -107,5 +107,13 @@ class LookupTest(unittest.TestCase):
         self.assertEqual(asked, ['how many championships do the celtics have'])
 
 
+    def test_recent_questions_get_the_year(self):
+        asked = []
+        with mock.patch.object(lookup, 'find', side_effect=lambda k, q, **kw: asked.append(q) or ('searx', 'x')):
+            lookup.resolve('who won the most recent super bowl', 'LOOKUP: most recent super bowl winner',
+                           lambda note: 'ok', log=lambda m: None, today='Friday October 02 2026')
+        self.assertEqual(asked, ['most recent super bowl winner 2026'])
+
+
 if __name__ == '__main__':
     unittest.main()
