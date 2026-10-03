@@ -2,7 +2,8 @@
 
 POST /chat {"text": "..."}  -> {"reply": "...", "humor": 60, "filed": 123 | null}
 GET  /health                -> {"ok": true, ...}
-GET  /history?n=20          -> last n turns
+GET  /history?n=20          -> last n turns (since the last chat reset)
+POST /chat/reset            -> app's "New chat": later turns start fresh (summary and Jake facts kept)
 
 Talks to the Ollama model "jarvis-tars" (Modelfile in this folder, built on baby-jarvis). Every turn is appended
 to history.jsonl; each call feeds the last ~20 turns plus a rolling summary of everything older (summary.json).
@@ -44,6 +45,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, 'history.jsonl')
 SUMMARY = os.path.join(HERE, 'summary.json')
 STATE = os.path.join(HERE, 'state.json')
+CHAT_RESET = os.path.join(HERE, 'chat-reset.json')
 LOG = os.path.join(HERE, 'tars.log')
 MODEL = os.environ.get('TARS_MODEL', 'jarvis-ironman:latest')
 SUMMARY_MODEL = os.environ.get('TARS_SUMMARY_MODEL', 'tars:latest')
@@ -101,6 +103,11 @@ def load_turns():
     except OSError:
         pass
     return out
+
+
+def chat_since():
+    """Turns before this are out of the conversation: the persona cutoff or the app's last "New chat"."""
+    return max(PERSONA_SINCE, read_json(CHAT_RESET, {}).get('since', ''))
 
 
 def append_turn(role, text, **extra):
@@ -432,7 +439,8 @@ def chat(text):
         return {'reply': done, 'humor': humor(), 'filed': None}
 
     fx = facts(text) if (TASK_WORDS.search(text) and not fm) else ''
-    turns = [t for t in load_turns()[:-1] if t.get('at', '') >= PERSONA_SINCE][-WINDOW:]
+    since = chat_since()
+    turns = [t for t in load_turns()[:-1] if t.get('at', '') >= since][-WINDOW:]
     if not TASK_WORDS.search(text):   # small talk: earlier board chatter ("card 256 finished") stays out of it
         turns = [t for t in turns if not BOARD_TALK_RE.search(t['text'])]
     mem = read_json(SUMMARY, {})
@@ -502,7 +510,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, {'ok': True, 'model': MODEL, 'turns': len(load_turns()), 'humor': humor()})
         elif u.path.rstrip('/') == '/history':
             n = int((urllib.parse.parse_qs(u.query).get('n') or ['20'])[0])
-            self._send(200, {'turns': load_turns()[-max(1, min(n, 200)):]})
+            since = chat_since()
+            turns = [t for t in load_turns() if t.get('at', '') >= since]
+            self._send(200, {'turns': turns[-max(1, min(n, 200)):]})
         else:
             self._send(404, {'error': 'try POST /chat, GET /health, GET /history'})
 
@@ -514,6 +524,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._send(400 if err else 200, {'error': err} if err else {'ok': True})
             except Exception as e:  # noqa: BLE001
                 return self._send(400, {'error': type(e).__name__})
+        if self.path.rstrip('/') == '/chat/reset':   # the app's "New chat" button
+            since = dt.datetime.now().isoformat(timespec='microseconds')
+            write_json(CHAT_RESET, {'since': since})
+            log(f'chat reset at {since}')
+            return self._send(200, {'ok': True, 'since': since})
         if self.path.rstrip('/') != '/chat':
             return self._send(404, {'error': 'try POST /chat'})
         try:
