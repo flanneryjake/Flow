@@ -24,8 +24,8 @@ Tailnet domain: `tail3bbcb8.ts.net`. Tailscale key expiry is off on all machines
 - Worker agent :8780, served at https://laptop-4150egrs.tail3bbcb8.ts.net:8443 (POST /wake, /now, GET /card/<n>).
 - Waker :8765 (https :8766). Print service :8795. Printer camera https :8081.
 - **Tars chat**: POST http://100.85.255.99:8790/chat {"text": ...}, GET /health. Ollama model `tars:latest` (qwen3.5 9B fine-tune "baby-jarvis"); callers must send "think": false. Code C:\Jarvis\tars.
-- Discord bot (Jarvis#0102 in "The Lobsta Shack 2.0") admin :8796 local only; ON/OFF switch in app System > Settings (PIN). It is OFF unless Jake turns it on.
-- Zoo-glass friends page :8781 (Funnel :10000, on STANDBY: C:\Jarvis\zoo-glass\TURN-ON.cmd / TURN-OFF.cmd). Fieldwork site tailnet-only :10001. Never enable Funnel on 443 or 8443.
+- ARCHIVED 2026-10-03 (not running; files in C:\Jarvis\_archive\2026-10-03 on the 5060): the Discord bot (Jarvis#0102) and the Zoo-glass friends page / Funnel :10000. Don't restart or reinstall them unless Jake asks.
+- Fieldwork site tailnet-only :10001. Never enable Funnel on 443 or 8443.
 - Rollback for the homebase move: C:\JarvisStaging\rollback.ps1. Hub+agent restart without admin: C:\Jarvis\tools\restart-hub-agent.ps1.
 - Hub, agent and waker run ELEVATED: a full restart needs admin (see the jarvis-dispatch skill for the self-elevating .cmd trick).
 

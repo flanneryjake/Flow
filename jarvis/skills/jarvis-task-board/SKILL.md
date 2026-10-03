@@ -5,7 +5,7 @@ description: Work Jake's Jarvis task board (GitHub issues in flanneryjake/jarvis
 
 # Jarvis task board (flanneryjake/jarvis-tasks)
 
-Private GitHub repo of issues. It replaced Notion on 2026-10-02 (Notion is retired; never read or write it). The PCs' Workers poll it (60 s, plus an instant POST /wake) and run approved cards. Jake approves from the phone app Inbox, the To-Do page, or Discord #approvals.
+Private GitHub repo of issues. It replaced Notion on 2026-10-02 (Notion is retired; never read or write it). The PCs' Workers poll it (60 s, plus an instant POST /wake) and run approved cards. Jake approves from the phone app Inbox or the app's To-Do tab (the Discord bot was archived 2026-10-03).
 
 ## Labels
 - Status (exactly one): `status:inbox` (idea, not triaged) -> `status:staged` (waiting for Jake's approval) -> `status:approved` (will run) -> `status:working` (claimed); side states `status:needs-jake`, `status:snoozed`. Closed = done (closed as "not planned" = rejected).
@@ -31,7 +31,7 @@ Private GitHub repo of issues. It replaced Notion on 2026-10-02 (Notion is retir
 - **Approve**: swap `status:staged` -> `status:approved` (no-op if already approved). Never approve a `pin` card for Jake.
 - **Read status / "what's running"**: open issues by status label; `status:working` = running now; Health issues for machines.
 - **Close as done**: comment what was done and where the result is, then close as completed. Leave PII (résumés, finances) out of the repo; say where it lives instead.
-- **Waiting on Jake**: don't relabel; add it to his To-Do page (jake-todo-list skill).
+- **Waiting on Jake**: add a `jarvis:jake` step marker so it shows in his To-Do tab (jake-todo-list skill).
 
 ## Don't flood GitHub
 The PCs share one account limit (5,000 calls/hr) and GitHub's secondary content-creation limit. On 2026-10-02 ~470 comments in 50 min tripped it. So: batch edits, one comment per change (edit your own comment instead of posting new ones), no repeated identical comments within 6 h, and pause on any 403 "secondary rate limit".
