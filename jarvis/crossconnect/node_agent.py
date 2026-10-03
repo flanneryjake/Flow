@@ -308,7 +308,9 @@ class Node:
                 'down' if port else 'unknown')
         disk = shutil.disk_usage(self.cfg.get('disk', 'C:\\' if WINDOWS else '/'))
         out = {'services': services, 'memory': _memory(), 'uptime_h': _uptime_h(),
-               'disk_free_gb': round(disk.free / 2**30, 1), 'paused': self._paused()}
+               'disk_free_gb': round(disk.free / 2**30, 1), 'paused': self._paused(),
+               'restartable': sorted(k for k, v in (self.cfg.get('services') or {}).items()
+                                     if v.get('task') or v.get('service'))}
         out['summary'] = ', '.join(f'{k} {v}' for k, v in services.items()) or 'no services listed'
         return out
 

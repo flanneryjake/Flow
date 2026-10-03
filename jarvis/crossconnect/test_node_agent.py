@@ -67,6 +67,7 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(out['node'], 'junk')
         self.assertIn('searxng', out['services'])
+        self.assertIsInstance(out['restartable'], list)
 
     def test_bad_signature_refused(self):
         code, out = send(self.node, '5060', 'status', key=WRONG)
