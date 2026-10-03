@@ -21,7 +21,7 @@ class FleetTest(unittest.TestCase):
         for said, node in [("How's the rig?", 'rig'), ('check on the junk laptop', 'junk'),
                            ('5060 status', '5060'), ('how is tars', '5060'), ('status of the backup laptop', 'junk')]:
             self.calls.clear()
-            self.assertIn('is fine', fleet.act(said), said)
+            self.assertIn('is fine, sir', fleet.act(said), said)
             self.assertEqual(self.calls, [(node, 'status', {})], said)
 
     def test_leaves_online_questions_to_actions(self):
@@ -45,7 +45,7 @@ class FleetTest(unittest.TestCase):
         reply = fleet.act('restart searxng')
         self.assertIn('Say "confirm"', reply)
         self.assertEqual(self.calls, [])
-        self.assertIn('Done', fleet.act('confirm'))
+        self.assertIn('Done, sir', fleet.act('confirm'))
         self.assertEqual(self.calls, [('junk', 'restart_service', {'name': 'searxng'})])
         self.assertIsNone(fleet.act('confirm'))   # used up
 

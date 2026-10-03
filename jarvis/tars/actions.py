@@ -136,7 +136,7 @@ def tailnet_status(text, cfg, run=tailscale):
     if host:
         if host not in state:
             return f"{nice(host, cfg)} isn't on the tailnet at all."
-        return f"{nice(host, cfg)} is {'online' if state[host] else 'offline'}."
+        return f"{nice(host, cfg)} is {'online' if state[host] else 'offline'}, sir."
     known = {h: nice(h, cfg) for h in set(cfg['machines'].values())}
     up = [known[h] for h in known if state.get(h)]
     down = [known[h] for h in known if h in state and not state[h]]
@@ -151,8 +151,8 @@ def ping(text, cfg, run=tailscale):
     m = re.search(r'in (\d+(?:\.\d+)?)\s*ms', out)
     audit(f'ping {host} rc={rc}')
     if rc == 0 and m:
-        return f"{nice(host, cfg)} answered in {round(float(m.group(1)))} milliseconds."
-    return f"{nice(host, cfg)} didn't answer."
+        return f"{nice(host, cfg)} answered in {round(float(m.group(1)))} milliseconds, sir."
+    return f"{nice(host, cfg)} didn't answer, sir."
 
 
 def wake(text, cfg, post=_post):
@@ -270,7 +270,7 @@ def notify(message, cfg, post=_post):
         audit(f'notify FAILED {type(e).__name__}')
         return "The hub didn't take the notification."
     audit(f'notify: {message[:80]}')
-    return 'Sent to your phone.'
+    return 'Sent to your phone, sir.'
 
 
 def worker_wake(cfg, post=_post):

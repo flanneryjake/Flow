@@ -33,7 +33,8 @@ CTX_RE = re.compile(r'^\[context\]\nNow: .+?\n\[/context\]\n\nJake: (.+)$', re.S
 MARKDOWN_RE = re.compile(r'(\*\*|__|^\s*[-*#]\s|^\s*\d+\.\s|`)', re.M)
 EMOJI_RE = re.compile('[\U0001F300-\U0001FAFF☀-➿]')
 SIR_RE = re.compile(r'\bsir\b', re.I)
-MAX_WORDS, MAX_SENTENCES, MAX_SIR = 60, 3, 0.30
+MAX_WORDS, MAX_SENTENCES, MAX_SIR = 60, 3, 0.40
+MIN_SIR = 0.30   # Jake 2026-10-03: "sir" in about 30-40% of replies
 
 errors, warnings = [], []
 
@@ -231,8 +232,8 @@ def check_conversations(path):
             if lane in ('live', 'home') and not any('LIVE (fresh data' in m['content'] for m in msgs if m['role'] == 'user'):
                 err(where, f'{lane} lane needs a LIVE block')
     ratio = sir / max(spoken, 1)
-    if ratio > MAX_SIR:
-        err('conversations.jsonl', f'"sir" in {ratio:.0%} of spoken replies (max {MAX_SIR:.0%})')
+    if not MIN_SIR <= ratio <= MAX_SIR:
+        err('conversations.jsonl', f'"sir" in {ratio:.0%} of spoken replies (want {MIN_SIR:.0%}-{MAX_SIR:.0%})')
     if multi < 40:
         err('conversations.jsonl', f'only {multi} conversations with 3+ exchanges (want 40+)')
     ids = [c.get('id') for c in convs]

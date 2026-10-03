@@ -71,7 +71,7 @@ def describe(node, out):
             return (f"I can't reach {who}'s helper. "
                     + ("It's probably asleep, which is normal for the rig." if node == 'rig' else
                        "It may be off or off the tailnet."))
-        return f"{who[0].upper() + who[1:]} turned me down: {err}."
+        return f"{who[0].upper() + who[1:]} turned me down, sir: {err}."
     svcs = out.get('services') or {}
     down = [_service_words(k) for k, v in svcs.items() if v == 'down']
     up = [_service_words(k) for k, v in svcs.items() if v == 'up']
@@ -83,7 +83,7 @@ def describe(node, out):
     if out.get('uptime_h') is not None:
         bits.append(f"up {round(out['uptime_h'])} hours")
     head = (f"{who[0].upper() + who[1:]} needs a look: {_join(down)} {'is' if len(down) == 1 else 'are'} down"
-            if down else f"{who[0].upper() + who[1:]} is fine")
+            if down else f"{who[0].upper() + who[1:]} is fine, sir")
     tail = (f"; {_join(up)} up" if up and down else f": {_join(up)} up" if up else '')
     paused = ' It is paused in fleet control.' if out.get('paused') else ''
     return head + tail + (', ' + ', '.join(bits) if bits else '') + '.' + paused
@@ -107,7 +107,7 @@ def _run_pending():
     if out.get('ok'):
         if p['cmd'] == 'restart_pc':
             return f"Done. {SAY[p['node']][0].upper() + SAY[p['node']][1:]} restarts in one minute."
-        return f"Done: {out.get('summary') or p['say']}."
+        return f"Done, sir: {out.get('summary') or p['say']}."
     err = str(out.get('error', 'no reason given'))
     if err.startswith('unreachable'):
         return f"I couldn't reach {SAY.get(p['node'], p['node'])}'s helper, so nothing was restarted."

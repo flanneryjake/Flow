@@ -392,7 +392,7 @@ def todo_answer(text):
                 "I can't read that one.")
     top = '; '.join(_short(i['title']) for i in items[:3])
     more = f', and {len(items) - 3} more' if len(items) > 3 else ''
-    head = f"{len(items)} board item{'s' if len(items) != 1 else ''} waiting on you: {top}{more}"
+    head = f"{len(items)} board item{'s' if len(items) != 1 else ''} waiting on you, sir: {top}{more}"
     return head + ('' if head.endswith('…') else '.') + ' The pinned To-Do page has the full list.'
 
 

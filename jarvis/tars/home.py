@@ -161,10 +161,10 @@ def act(text, post=_post, log=print):
     if not kind:
         return None
     if kind == 'blocked':
-        return "That one waits for your PIN. I don't buy, order, call or message on my own."
+        return "That one waits for your PIN, sir. I don't buy, order, call or message on my own."
     url = snapshot().get('home_url')
     if not url:
-        return "I can't reach Home Assistant just yet. It hasn't checked in with me."
+        return "I can't reach Home Assistant just yet, sir. It hasn't checked in with me."
     body = {'kind': 'listening', 'on': a} if kind == 'listening' else {'kind': 'alexa', 'echo': a, 'command': b}
     try:
         post(url, body)
@@ -173,6 +173,6 @@ def act(text, post=_post, log=print):
         return "Home Assistant didn't answer. The backup laptop may be napping."
     log(f'home: {kind} {a} {b or ""}'.strip())
     if kind == 'listening':
-        return 'Listening, sir.' if a else "Understood. I'll stop listening."
+        return 'Listening.' if a else "Understood. I'll stop listening."
     room = 'bedroom' if 'bedroom' in a else 'kitchen'
-    return 'Right away, sir.' if room == 'kitchen' else 'Done. On the bedroom Echo.'
+    return 'Right away, sir.' if room == 'kitchen' else 'Done, sir. On the bedroom Echo.'

@@ -118,7 +118,7 @@ def ask_with_holding_line(text, wait=HOLD_S, ask=None, say=None):
     t.join(wait)
     if t.is_alive():
         try:
-            say("One moment.")
+            say("One moment, sir.")
         except Exception as e:  # noqa: BLE001
             log(f"Echo failed: {e}")
         t.join()

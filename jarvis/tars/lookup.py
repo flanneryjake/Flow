@@ -246,7 +246,7 @@ def resolve(text, first_reply, answer_with, log=print, today='', check_facts=Tru
         query = f'{query} {year.group(1)}'   # pull current pages, not the ones the model already remembers
     src, facts = find(kind, query, private=is_private(text) or is_private(query), log=log)
     if not src:
-        return ("I couldn't get a straight answer from the web or from Claude just now. "
+        return ("I couldn't get a straight answer from the web or from Claude just now, sir. "
                 "Say \"tell Claude to look into it\" and I'll put it on the board for tonight.")
     if asked_by_name and src in ('claude', 'gemini'):   # Jake asked that helper: speak its answer as-is
         return scrub(re.sub(r'\s+', ' ', facts))[:600]
