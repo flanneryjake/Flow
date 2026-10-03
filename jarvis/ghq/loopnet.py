@@ -452,7 +452,33 @@ def report(since=None, triage_states=None, titles=None):
     return {"since": since, "generated": _now().isoformat(timespec="seconds"), "day": st.get("day"),
             "counts": {"looped": sum(c["looped"] for c in items), "held": sum(c["held"] for c in items),
                        "reviewed": sum(bool(c["reviewed_by"]) for c in items)},
-            "cards": items, "exile_review": _read_json(EXILE_REVIEW, {})}
+            "cards": items, "exile_review": _read_json(EXILE_REVIEW, {}), "reeval": _latest_reeval(),
+            "needs_jake": _needs_jake_score(since)}
+
+
+def _needs_jake_score(since):
+    """The needs-Jake catcher's numbers since the last report: verified, false positives, held, per-model agreement."""
+    try:
+        import needsjake
+        return needsjake.score(since)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:200]}
+
+
+def _latest_reeval():
+    """The newest review re-evaluation (Tars / Jarvis vs Claude), summary only: rates + per-card match."""
+    try:
+        files = sorted(f for f in os.listdir(HOME) if f.startswith("reeval-") and f.endswith(".json"))
+    except OSError:
+        return {}
+    if not files:
+        return {}
+    r = _read_json(os.path.join(HOME, files[-1]), {})
+    return {"file": files[-1], "at": r.get("at"), "count": r.get("count"), "tars": r.get("tars"), "jarvis": r.get("jarvis"),
+            "cards": [{"card": c.get("card"), "title": c.get("title"),
+                       "tars": (c.get("tars") or {}).get("match"), "jarvis": (c.get("jarvis") or {}).get("match"),
+                       "final": (c.get("claude") or {}).get("action"), "outcome": (c.get("claude") or {}).get("outcome")}
+                      for c in r.get("cards", [])]}
 
 
 # ---------------------------------------------------------------- status (hub /api/loopnet/status, morning report)
