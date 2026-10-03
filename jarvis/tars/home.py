@@ -98,6 +98,35 @@ def facts(text):
     return '\n'.join(lines)
 
 
+ALARM_Q_RE = re.compile(r"\b(alarms?|wake me|wake-up|wakeup)\b", re.I)
+WORK_DAYS = {1, 2, 3, 4, 5}   # Tue-Sat; HA's morning package sets them at 9 PM the night before
+
+
+def alarm_answer(text, now=None):
+    """Alarm questions are answered here from the HA snapshot, never by the model. None if not an alarm question."""
+    if not ALARM_Q_RE.search(text or '') or parse(text)[0]:
+        return None
+    snap = snapshot()
+    if not snap:
+        return "Home Assistant hasn't checked in with me yet, sir, so I can't see the Echo alarms."
+    times = []
+    for room, key in (('bedroom', 'next_alarm_bedroom'), ('kitchen', 'next_alarm_kitchen')):
+        try:
+            times.append((dt.datetime.fromisoformat(snap.get(key)).astimezone(), room))
+        except (TypeError, ValueError):
+            pass
+    if times:
+        t, room = min(times)
+        return f"Your next alarm is {_when(t.isoformat())} on the {room} Echo, sir."
+    now = now or dt.datetime.now().astimezone()
+    if (now + dt.timedelta(days=1)).weekday() in WORK_DAYS:
+        if now.hour < 21:
+            return "Nothing's set on the Echos yet, sir. Tomorrow's work alarms go on at 9 tonight."
+        return ("I can't see tomorrow's alarms on the Echos right now, sir. They should have gone on at 9; "
+                "say \"set an alarm for 4\" if you'd like to be sure.")
+    return "No alarms are showing on the Echos, sir. Tomorrow's a day off."
+
+
 def _post(url, body, timeout=8):
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method='POST',
                                  headers={'Content-Type': 'application/json'})

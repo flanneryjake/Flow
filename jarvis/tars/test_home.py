@@ -60,5 +60,17 @@ class HomeTest(unittest.TestCase):
         self.assertNotIn('No alarms are set', f)
 
 
+    def test_alarm_answers(self):
+        self.assertIn('Your next alarm is', home.alarm_answer("what's my alarm set for"))
+        self.assertIsNone(home.alarm_answer('set an alarm for 6'))
+        self.assertIsNone(home.alarm_answer('capital of peru'))
+        home.save_snapshot({'home_url': URL, 'next_alarm_bedroom': 'unknown', 'next_alarm_kitchen': 'unknown'})
+        fri = lambda h: dt.datetime(2026, 10, 2, h, 0).astimezone()
+        self.assertIn('go on at 9 tonight', home.alarm_answer('when does my alarm go off', fri(20)))
+        self.assertIn("can't see", home.alarm_answer('when does my alarm go off', fri(22)))
+        sat = dt.datetime(2026, 10, 3, 20, 0).astimezone()
+        self.assertIn('day off', home.alarm_answer('any alarms tomorrow', sat))
+
+
 if __name__ == '__main__':
     unittest.main()

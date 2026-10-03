@@ -392,7 +392,7 @@ def chat(text):
             note = ('Filing the card FAILED (GitHub error). Tell Jake it did not get filed and he should try again '
                     'or tell Claude directly.')
 
-    done = None if (fm or note) else home.act(text, log=log)
+    done = None if (fm or note) else (home.act(text, log=log) or home.alarm_answer(text))
     if done:   # "play jazz", "lights off", "set an alarm for 6": run it through HA, no model needed
         append_turn('assistant', done)
         return {'reply': done, 'humor': humor(), 'filed': None}
