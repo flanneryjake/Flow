@@ -8,8 +8,9 @@ Cards: jarvis-tasks #1516-#1525 (E1-E10) and #1547. Findings: jarvis-outputs `wo
 |---|---|
 | `repeatguard.py` | **E2 + E4.** A no-AI check inside `ghq.claim()`: when a card already asked Jake and nothing changed since (no answer, no ticked To-Do item, no edit, no new file, no arrived input), the claim is refused. The card goes back to needs-jake with its To-Do step re-attached. Approvals alone never count as a change. Fails open. |
 | `apply_worker_efficiency.py` | Installs the repeat guard and **E7** (every run records a model: `claude:<default>`, the `--model` passed, `local:*`, or `worker-only` when no model ran) into either Worker fork. It checks every anchor first and writes nothing on a miss, writes backups, and supports `--check` and `--revert`. |
+| `apply_crash_pause.py` | **#1547.** A crashed Claude run (non-zero exit, empty output, an API error, or a card summary that merely mentions limits) no longer pauses the whole Worker for 5 h. Only the CLI's own limit or login line does. A crash logs that card `failed` and skips it for 30 min while the queue keeps going. Three crashes in a row rest the Worker 30 min. A limit with no readable reset time re-checks after 1 h (it reads `\|<epoch>` and `resets Oct 6`). Works on both forks, with `--check` and `--revert`. |
 | `replay.py`, `fixtures/` | Replays real card histories (#690, #123, #924, #378, #7) to show which claims the guard would have refused. |
-| `test_repeatguard.py`, `test_install.py` | Tests. `WE_SNAPSHOTS=<dir with 5060/ and rig/ copies> pytest` also installs into both forks and drives the patched `claim()`. |
+| `test_repeatguard.py`, `test_install.py`, `test_crash_pause.py` | Tests. `WE_SNAPSHOTS=<dir with 5060/ and rig/ copies> pytest` also installs into both forks and drives the patched `claim()`. |
 
 ## Replay on last night's worst loops
 
