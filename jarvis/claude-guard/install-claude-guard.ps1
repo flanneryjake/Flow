@@ -63,9 +63,12 @@ if ($admin) {
 } else {
     # In the user's session powershell flashes a console even with -WindowStyle Hidden, so start it through a .vbs.
     $vbs = Join-Path $dir 'run-guard.vbs'
-    @('Set sh = CreateObject("WScript.Shell")', "WScript.Quit sh.Run(""powershell.exe $($psArgs.Replace('"', '""'))"", 0, True)") |
+    # Built with single-quoted pieces: Windows PowerShell 5.1 reads "" inside $(...) of a double-quoted string as an
+    # escaped quote, which wrote a .vbs with a compile error (rig, 10/03). //B keeps any script error from popping up.
+    $run = 'powershell.exe ' + $psArgs.Replace('"', '""')
+    @('Set sh = CreateObject("WScript.Shell")', ('WScript.Quit sh.Run("' + $run + '", 0, True)')) |
         Set-Content -Path $vbs -Encoding ASCII
-    $action = New-ScheduledTaskAction -Execute 'wscript.exe' -WorkingDirectory $dir -Argument "`"$vbs`""
+    $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -WorkingDirectory $dir -Argument "//B //Nologo `"$vbs`""
     $boot = New-ScheduledTaskTrigger -AtLogOn -User $user
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 }
