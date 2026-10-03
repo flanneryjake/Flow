@@ -5,7 +5,6 @@
   "pause_flag": "C:\\Jarvis\\fleet\\paused.flag",
   "busy_flag": null,
   "services": {
-    "agent": {"port": 8443},
     "ollama": {"port": 11434},
     "jellyfin": {"port": 8096}
   },
