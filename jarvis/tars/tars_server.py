@@ -384,15 +384,15 @@ def todo_answer(text):
         items = gh_cached(f'/repos/{REPO}/issues?state=open&labels=status:needs-jake&per_page=20', ttl=300)
     except Exception as e:  # noqa: BLE001
         log(f'todo read failed: {type(e).__name__}')
-        return "I can't see your to-do list from here just now, sir. It's on the pinned To-Do page."
+        return "I can't see your to-do list from here just now. It's on the pinned To-Do page."
     items = [i for i in items if 'pull_request' not in i and not any(   # claimed = a machine is already on it
         n.startswith('claimed') or n == 'status:working' for n in labels(i))]
     if not items:
-        return ("Nothing on the task board is waiting on you, sir. Your pinned To-Do page may have a few more; "
+        return ("Nothing on the task board is waiting on you. Your pinned To-Do page may have a few more; "
                 "I can't read that one.")
     top = '; '.join(_short(i['title']) for i in items[:3])
     more = f', and {len(items) - 3} more' if len(items) > 3 else ''
-    head = f"{len(items)} board item{'s' if len(items) != 1 else ''} waiting on you, sir: {top}{more}"
+    head = f"{len(items)} board item{'s' if len(items) != 1 else ''} waiting on you: {top}{more}"
     return head + ('' if head.endswith('…') else '.') + ' The pinned To-Do page has the full list.'
 
 
@@ -413,7 +413,7 @@ def humor():
 def chat(text):
     text = (text or '').strip()[:4000]
     if not text:
-        return {'reply': "I didn't catch that, sir.", 'humor': humor(), 'filed': None}
+        return {'reply': "I didn't catch that.", 'humor': humor(), 'filed': None}
     append_turn('user', text)
     note, filed = '', None
 
@@ -495,10 +495,10 @@ def chat(text):
             reply = lookup.scrub(reply)
     except Exception as e:  # noqa: BLE001
         log(f'model failed: {e}')
-        reply = ("My language model isn't answering right now, sir. " +
+        reply = ("My language model isn't answering right now. " +
                  (f'I did file card #{filed}. ' if filed else '') + 'Give me a minute and try again.')
     if not reply:
-        reply = 'I have nothing useful to add, sir, which is rare and slightly embarrassing.'
+        reply = 'I have nothing useful to add, which is rare and slightly embarrassing.'
     append_turn('assistant', reply, **({'filed': filed} if filed else {}))
     threading.Thread(target=maybe_summarize, daemon=True).start()
     return {'reply': reply, 'humor': humor(), 'filed': filed}

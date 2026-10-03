@@ -108,7 +108,7 @@ def alarm_answer(text, now=None):
         return None
     snap = snapshot()
     if not snap:
-        return "Home Assistant hasn't checked in with me yet, sir, so I can't see the Echo alarms."
+        return "Home Assistant hasn't checked in with me yet, so I can't see the Echo alarms."
     times = []
     for room, key in (('bedroom', 'next_alarm_bedroom'), ('kitchen', 'next_alarm_kitchen')):
         try:
@@ -117,14 +117,14 @@ def alarm_answer(text, now=None):
             pass
     if times:
         t, room = min(times)
-        return f"Your next alarm is {_when(t.isoformat())} on the {room} Echo, sir."
+        return f"Your next alarm is {_when(t.isoformat())} on the {room} Echo."
     now = now or dt.datetime.now().astimezone()
     if (now + dt.timedelta(days=1)).weekday() in WORK_DAYS:
         if now.hour < 21:
-            return "Nothing's set on the Echos yet, sir. Tomorrow's work alarms go on at 9 tonight."
-        return ("I can't see tomorrow's alarms on the Echos right now, sir. They should have gone on at 9; "
+            return "Nothing's set on the Echos yet. Tomorrow's work alarms go on at 9 tonight."
+        return ("I can't see tomorrow's alarms on the Echos right now. They should have gone on at 9; "
                 "say \"set an alarm for 4\" if you'd like to be sure.")
-    return "No alarms are showing on the Echos, sir. Tomorrow's a day off."
+    return "No alarms are showing on the Echos. Tomorrow's a day off."
 
 
 def _post(url, body, timeout=8):
@@ -161,18 +161,18 @@ def act(text, post=_post, log=print):
     if not kind:
         return None
     if kind == 'blocked':
-        return "That one waits for your PIN, sir. I don't buy, order, call or message on my own."
+        return "That one waits for your PIN. I don't buy, order, call or message on my own."
     url = snapshot().get('home_url')
     if not url:
-        return "I can't reach Home Assistant just yet, sir. It hasn't checked in with me."
+        return "I can't reach Home Assistant just yet. It hasn't checked in with me."
     body = {'kind': 'listening', 'on': a} if kind == 'listening' else {'kind': 'alexa', 'echo': a, 'command': b}
     try:
         post(url, body)
     except Exception as e:  # noqa: BLE001
         log(f'home command failed: {type(e).__name__}')
-        return "Home Assistant didn't answer, sir. The backup laptop may be napping."
+        return "Home Assistant didn't answer. The backup laptop may be napping."
     log(f'home: {kind} {a} {b or ""}'.strip())
     if kind == 'listening':
         return 'Listening, sir.' if a else "Understood. I'll stop listening."
     room = 'bedroom' if 'bedroom' in a else 'kitchen'
-    return 'Right away, sir.' if room == 'kitchen' else 'Done, sir. On the bedroom Echo.'
+    return 'Right away, sir.' if room == 'kitchen' else 'Done. On the bedroom Echo.'

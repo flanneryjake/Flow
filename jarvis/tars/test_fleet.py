@@ -21,7 +21,7 @@ class FleetTest(unittest.TestCase):
         for said, node in [("How's the rig?", 'rig'), ('check on the junk laptop', 'junk'),
                            ('5060 status', '5060'), ('how is tars', '5060'), ('status of the backup laptop', 'junk')]:
             self.calls.clear()
-            self.assertIn('is fine, sir', fleet.act(said), said)
+            self.assertIn('is fine', fleet.act(said), said)
             self.assertEqual(self.calls, [(node, 'status', {})], said)
 
     def test_leaves_online_questions_to_actions(self):
@@ -37,7 +37,7 @@ class FleetTest(unittest.TestCase):
 
     def test_down_and_unreachable(self):
         self.replies[('junk', 'status')] = dict(FINE, services={'searxng': 'down', 'mosquitto': 'up'})
-        self.assertIn('needs a look, sir: searxng is down; mosquitto up', fleet.act('check on the junk laptop'))
+        self.assertIn('needs a look: searxng is down; mosquitto up', fleet.act('check on the junk laptop'))
         self.replies[('rig', 'status')] = {'ok': False, 'error': 'unreachable: URLError'}
         self.assertIn('probably asleep', fleet.act("how's the rig"))
 
@@ -45,14 +45,14 @@ class FleetTest(unittest.TestCase):
         reply = fleet.act('restart searxng')
         self.assertIn('Say "confirm"', reply)
         self.assertEqual(self.calls, [])
-        self.assertIn('Done, sir', fleet.act('confirm'))
+        self.assertIn('Done', fleet.act('confirm'))
         self.assertEqual(self.calls, [('junk', 'restart_service', {'name': 'searxng'})])
         self.assertIsNone(fleet.act('confirm'))   # used up
 
     def test_restart_named_machine_and_refusal(self):
         fleet.act('restart home assistant on the junk laptop')
         self.replies[('junk', 'restart_service')] = {'ok': False, 'error': "'home-assistant' is not a restartable service on junk"}
-        self.assertIn('refused, sir', fleet.act('Confirm.'))
+        self.assertIn('refused', fleet.act('Confirm.'))
 
     def test_restart_pc(self):
         self.assertIn('Restart the junk laptop?', fleet.act('restart the junk laptop'))

@@ -103,7 +103,7 @@ def ask_tars(text, url=TARS_URL, timeout=180):   # a Claude lookup can take a mi
 
 
 def ask_with_holding_line(text, wait=HOLD_S, ask=None, say=None):
-    """Ask TARS; if it is still thinking after `wait` s (a web or Claude lookup), say "One moment, sir" meanwhile."""
+    """Ask TARS; if it is still thinking after `wait` s (a web or Claude lookup), say "One moment" meanwhile."""
     ask, say = ask or ask_tars, say or speak
     out = {}
 
@@ -118,7 +118,7 @@ def ask_with_holding_line(text, wait=HOLD_S, ask=None, say=None):
     t.join(wait)
     if t.is_alive():
         try:
-            say("One moment, sir.")
+            say("One moment.")
         except Exception as e:  # noqa: BLE001
             log(f"Echo failed: {e}")
         t.join()

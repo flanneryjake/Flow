@@ -135,8 +135,8 @@ def tailnet_status(text, cfg, run=tailscale):
     host = _host(m.group(1), cfg) if m and m.group(1) else None
     if host:
         if host not in state:
-            return f"{nice(host, cfg)} isn't on the tailnet at all, sir."
-        return f"{nice(host, cfg)} is {'online' if state[host] else 'offline'}, sir."
+            return f"{nice(host, cfg)} isn't on the tailnet at all."
+        return f"{nice(host, cfg)} is {'online' if state[host] else 'offline'}."
     known = {h: nice(h, cfg) for h in set(cfg['machines'].values())}
     up = [known[h] for h in known if state.get(h)]
     down = [known[h] for h in known if h in state and not state[h]]
@@ -151,8 +151,8 @@ def ping(text, cfg, run=tailscale):
     m = re.search(r'in (\d+(?:\.\d+)?)\s*ms', out)
     audit(f'ping {host} rc={rc}')
     if rc == 0 and m:
-        return f"{nice(host, cfg)} answered in {round(float(m.group(1)))} milliseconds, sir."
-    return f"{nice(host, cfg)} didn't answer, sir."
+        return f"{nice(host, cfg)} answered in {round(float(m.group(1)))} milliseconds."
+    return f"{nice(host, cfg)} didn't answer."
 
 
 def wake(text, cfg, post=_post):
@@ -161,7 +161,7 @@ def wake(text, cfg, post=_post):
         post(url, {'by': 'tars', 'reason': text[:120]})
     except Exception as e:  # noqa: BLE001
         audit(f'wake rig FAILED {type(e).__name__}')
-        return "The wake relay on the backup laptop didn't answer, sir."
+        return "The wake relay on the backup laptop didn't answer."
     audit('wake rig sent')
     return 'Waking the rig, sir. Give it a minute or two.'
 
@@ -244,10 +244,10 @@ def file_media(cfg, dry_run=False):
 
 def media_reply(cfg):
     if not (cfg['media'].get('inbox') and (cfg['media'].get('movies') or cfg['media'].get('tv'))):
-        return "I haven't been told where your movie and TV folders are yet, sir."
+        return "I haven't been told where your movie and TV folders are yet."
     moved, skipped = file_media(cfg)
     if not moved and not skipped:
-        return 'Nothing new to file, sir.'
+        return 'Nothing new to file.'
     out = f"Filed {len(moved)} {'video' if len(moved) == 1 else 'videos'}" + (f": {', '.join(moved[:3])}" if moved else '')
     if len(moved) > 3:
         out += f' and {len(moved) - 3} more'
@@ -262,15 +262,15 @@ def media_reply(cfg):
 def notify(message, cfg, post=_post):
     message = message.strip().strip('"').strip()
     if not message:
-        return 'What should the notification say, sir?'
+        return 'What should the notification say?'
     try:
         post(cfg['notify_url'], {'title': 'Jarvis', 'body': message[:200], 'source': 'tars'},
              cfg.get('notify_headers'))
     except Exception as e:  # noqa: BLE001
         audit(f'notify FAILED {type(e).__name__}')
-        return "The hub didn't take the notification, sir."
+        return "The hub didn't take the notification."
     audit(f'notify: {message[:80]}')
-    return 'Sent to your phone, sir.'
+    return 'Sent to your phone.'
 
 
 def worker_wake(cfg, post=_post):
@@ -278,9 +278,9 @@ def worker_wake(cfg, post=_post):
         post(cfg['worker_wake_url'], {'by': 'tars'}, cfg.get('worker_headers'))
     except Exception as e:  # noqa: BLE001
         audit(f'worker wake FAILED {type(e).__name__}')
-        return "The Worker didn't answer, sir."
+        return "The Worker didn't answer."
     audit('worker wake sent')
-    return "The Worker's checking the board now, sir."
+    return "The Worker's checking the board now."
 
 
 # ----------------------------------------------------------------------------- dispatch
@@ -307,7 +307,7 @@ def act(text, log=print):
     except Exception as e:  # noqa: BLE001
         log(f'action failed: {type(e).__name__}: {str(e)[:160]}')
         audit(f'FAILED {type(e).__name__} for: {t[:80]}')
-        return "That didn't work, sir. It's in the actions log."
+        return "That didn't work. It's in the actions log."
     return None
 
 

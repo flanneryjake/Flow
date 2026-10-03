@@ -68,10 +68,10 @@ def describe(node, out):
     if not out.get('ok'):
         err = str(out.get('error', ''))
         if err.startswith('unreachable'):
-            return (f"I can't reach {who}'s helper, sir. "
+            return (f"I can't reach {who}'s helper. "
                     + ("It's probably asleep, which is normal for the rig." if node == 'rig' else
                        "It may be off or off the tailnet."))
-        return f"{who[0].upper() + who[1:]} turned me down, sir: {err}."
+        return f"{who[0].upper() + who[1:]} turned me down: {err}."
     svcs = out.get('services') or {}
     down = [_service_words(k) for k, v in svcs.items() if v == 'down']
     up = [_service_words(k) for k, v in svcs.items() if v == 'up']
@@ -82,8 +82,8 @@ def describe(node, out):
         bits.append(f"{out['disk_free_gb']:g} GB of disk free")
     if out.get('uptime_h') is not None:
         bits.append(f"up {round(out['uptime_h'])} hours")
-    head = (f"{who[0].upper() + who[1:]} needs a look, sir: {_join(down)} {'is' if len(down) == 1 else 'are'} down"
-            if down else f"{who[0].upper() + who[1:]} is fine, sir")
+    head = (f"{who[0].upper() + who[1:]} needs a look: {_join(down)} {'is' if len(down) == 1 else 'are'} down"
+            if down else f"{who[0].upper() + who[1:]} is fine")
     tail = (f"; {_join(up)} up" if up and down else f": {_join(up)} up" if up else '')
     paused = ' It is paused in fleet control.' if out.get('paused') else ''
     return head + tail + (', ' + ', '.join(bits) if bits else '') + '.' + paused
@@ -97,7 +97,7 @@ def _join(items):
 def _ask(cmd, node, args, say):
     _pending.clear()
     _pending.update(cmd=cmd, node=node, args=args, say=say, at=time.time())
-    return f"{say[0].upper() + say[1:]}? Say \"confirm\" within a minute and I'll do it, sir."
+    return f"{say[0].upper() + say[1:]}? Say \"confirm\" within a minute and I'll do it."
 
 
 def _run_pending():
@@ -106,12 +106,12 @@ def _run_pending():
     out = _call(p['node'], p['cmd'], p['args'])
     if out.get('ok'):
         if p['cmd'] == 'restart_pc':
-            return f"Done, sir. {SAY[p['node']][0].upper() + SAY[p['node']][1:]} restarts in one minute."
-        return f"Done, sir: {out.get('summary') or p['say']}."
+            return f"Done. {SAY[p['node']][0].upper() + SAY[p['node']][1:]} restarts in one minute."
+        return f"Done: {out.get('summary') or p['say']}."
     err = str(out.get('error', 'no reason given'))
     if err.startswith('unreachable'):
-        return f"I couldn't reach {SAY.get(p['node'], p['node'])}'s helper, sir, so nothing was restarted."
-    return f"{SAY.get(p['node'], p['node'])[0].upper() + SAY.get(p['node'], p['node'])[1:]} refused, sir: {err}."
+        return f"I couldn't reach {SAY.get(p['node'], p['node'])}'s helper, so nothing was restarted."
+    return f"{SAY.get(p['node'], p['node'])[0].upper() + SAY.get(p['node'], p['node'])[1:]} refused: {err}."
 
 
 def act(text, log=print):
@@ -125,7 +125,7 @@ def act(text, log=print):
             return _run_pending()
         if _pending and CANCEL_RE.match(t):
             _pending.clear()
-            return 'Cancelled, sir. Nothing was restarted.'
+            return 'Cancelled. Nothing was restarted.'
         if ALL_RE.search(t):
             return ' '.join(describe(n, _call(n, 'status')) for n in ALL)
         m = STATUS_RE.search(t)
@@ -148,5 +148,5 @@ def act(text, log=print):
             return _ask('restart_service', node, {'name': name}, f"restart {_service_words(name)} on {SAY[node]}")
     except Exception as e:  # noqa: BLE001
         log(f'fleet failed: {type(e).__name__}: {str(e)[:160]}')
-        return "I couldn't reach the machine helpers just now, sir. It's in the Tars log."
+        return "I couldn't reach the machine helpers just now. It's in the Tars log."
     return None

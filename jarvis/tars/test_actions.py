@@ -50,7 +50,7 @@ class ActionsTest(unittest.TestCase):
     def test_tailnet(self):
         cfg = actions.config()
         run = lambda *a: (0, STATUS)
-        self.assertEqual(actions.tailnet_status('is the rig online', cfg, run), 'The rig is offline, sir.')
+        self.assertEqual(actions.tailnet_status('is the rig online', cfg, run), 'The rig is offline.')
         self.assertIn('Online: ', actions.tailnet_status('which machines are up', cfg, run))
         self.assertIn('answered in 12', actions.ping('ping the rig', cfg, lambda *a: (0, 'pong from rig via DERP in 12ms')))
 
@@ -62,7 +62,7 @@ class ActionsTest(unittest.TestCase):
         sent = []
         cfg = actions.config()
         self.assertEqual(actions.notify('"dinner is ready"', cfg, post=lambda u, b, h=None: sent.append(b)),
-                         'Sent to your phone, sir.')
+                         'Sent to your phone.')
         self.assertEqual(sent[0]['body'], 'dinner is ready')
         self.assertIsNone(actions.act('what is the capital of peru'))
         self.assertIsNone(actions.act('are the lights on'))
