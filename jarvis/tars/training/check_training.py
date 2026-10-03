@@ -34,7 +34,7 @@ MARKDOWN_RE = re.compile(r'(\*\*|__|^\s*[-*#]\s|^\s*\d+\.\s|`)', re.M)
 EMOJI_RE = re.compile('[\U0001F300-\U0001FAFF☀-➿]')
 SIR_RE = re.compile(r'\bsir\b', re.I)
 MAX_WORDS, MAX_SENTENCES, MAX_SIR = 60, 3, 0.40
-MIN_SIR = 0.30   # Jake 2026-10-03: "sir" in about 30-40% of replies
+MIN_SIR = 0.30   # Jake 2026-10-03: "sir" once in a while, never every line (about 30-40% of replies)
 
 errors, warnings = [], []
 
