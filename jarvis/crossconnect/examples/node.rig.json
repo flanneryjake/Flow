@@ -1,0 +1,15 @@
+{
+  "node": "rig",
+  "bind": "100.x.y.z (the rig's tailnet address, filled in at install)",
+  "port": 8799,
+  "pause_flag": "C:\\Jarvis\\fleet\\paused.flag",
+  "busy_flag": null,
+  "services": {
+    "agent": {"port": 8443},
+    "ollama": {"port": 11434},
+    "jellyfin": {"port": 8096}
+  },
+  "wake": {},
+  "fixes": {},
+  "logs": {}
+}

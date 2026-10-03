@@ -1,0 +1,16 @@
+{
+  "node": "5060",
+  "bind": "100.85.255.99",
+  "port": 8799,
+  "pause_flag": "C:\\Jarvis\\fleet\\paused.flag",
+  "busy_flag": null,
+  "services": {
+    "tars": {"port": 8790, "task": "Jarvis TARS"},
+    "hub": {"port": 8770},
+    "worker": {"port": 8780},
+    "ollama": {"port": 11434}
+  },
+  "wake": {"rig": {"url": "http://desktop-5ve3c77.tail3bbcb8.ts.net:8767/wake/rig"}},
+  "fixes": {},
+  "logs": {}
+}
