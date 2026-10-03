@@ -1,4 +1,6 @@
-"""Install the E2/E4 repeat guard and the E7 model-name fix into a Worker's live files (5060 or rig fork).
+"""Install the E2/E4 repeat guard, the E7 model-name fix and two #1547 usage fixes into a Worker's live files
+(5060 or rig fork): helper `claude -p` calls run on Sonnet (JARVIS_HELPER_MODEL), and the rig's estimate-based budget
+holds stay off unless JARVIS_BUDGET_OFF=0.
 
     python apply_worker_efficiency.py --ghq C:\\Jarvis\\ghq --agent <folder with agent.py> [--check | --revert]
 
@@ -40,7 +42,20 @@ GHQ_EDITS = [
      "        return False  # the cached queue was stale: someone else has it, or it was snoozed or closed\n"
      "    if not _repeat_guard_ok(number, current):\n"
      "        return False  # asked Jake already and nothing changed: handed back to him (repeatguard.py)\n"),
+    # #1547: the needs-Jake verify / loop triage / Jake-step helpers ran `claude -p` on the default (Opus) model,
+    # 3-5 calls per needs-Jake run. They are short yes/no and rewrite jobs: run them on Sonnet unless set otherwise.
+    ("    r = subprocess.run([exe, '-p', '--output-format', 'text'], input=prompt,",
+     "    r = subprocess.run([exe, '-p', '--output-format', 'text',\n"
+     "                        '--model', os.environ.get('JARVIS_HELPER_MODEL', 'sonnet')], input=prompt,"),
 ]
+
+# #1547 (rig only): the estimate-based budget holds were off only while JARVIS_BUDGET_OFF existed, and "0" still meant
+# off. Jake 10/02: no estimate holds. Same rule as the 5060's budget.py now: off unless set to "0".
+BUDGET_EDITS = [('    if os.environ.get("JARVIS_BUDGET_OFF"):\n        return None\n',
+                 '    if os.environ.get("JARVIS_BUDGET_OFF", "1") != "0":   # %s: off unless set to "0"\n'
+                 '        return None\n' % TAG),
+                ('    if used_fraction()[0] >= IDLE_BELOW and not os.environ.get("JARVIS_BUDGET_OFF"):\n',
+                 '    if used_fraction()[0] >= IDLE_BELOW and os.environ.get("JARVIS_BUDGET_OFF", "1") == "0":\n')]
 
 AGENT_HELPER = '''def run_model_label(model=None):
     """E7 (%s): the model name every run comment records. None/"" means the Claude CLI default."""
@@ -101,7 +116,7 @@ def main(argv=None):
     guard_dst = os.path.join(a.ghq, 'repeatguard.py')
 
     if a.revert:
-        for f in (ghq_py, agent_py):
+        for f in (ghq_py, agent_py, os.path.join(a.agent, 'budget_guard.py')):
             baks = sorted(glob.glob(f + '.bak-*-we'))
             if baks:
                 shutil.copy2(baks[-1], f)
@@ -113,6 +128,9 @@ def main(argv=None):
 
     agent_src = open(agent_py, encoding='utf-8').read()
     jobs = [(ghq_py, GHQ_EDITS), (agent_py, agent_edits(agent_src))]
+    budget_py = os.path.join(a.agent, 'budget_guard.py')
+    if os.path.exists(budget_py):
+        jobs.append((budget_py, BUDGET_EDITS))
     results, failed = [], False
     for path, edits in jobs:
         old, new, why = plan(path, edits)
