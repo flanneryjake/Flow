@@ -13,18 +13,19 @@ Commands (anything else is refused):
   run_fix {"name"}             run a fix script listed in config, only when its sha256 still matches
   logs {"name"}                last 200 lines of a log file listed in config
 
-A request is JSON {"cmd", "args", "caller", "ts", "nonce"} with header X-Jarvis-Sig = hex HMAC-SHA256 of the raw body,
-keyed with the CALLER's key (C:\\Jarvis\\secrets\\crossconnect-peers.json on this machine holds each allowed caller's
-key; the values are never logged or returned). Requests older than 60 s, or a nonce seen before, are refused.
+A request is JSON {"cmd", "args", "caller", "ts", "nonce"} with header X-Jarvis-Sig = base64 Ed25519 signature of the
+raw body by the CALLER's private key. Each machine makes its own key pair once (--make-key); the private half stays in
+C:\\Jarvis\\secrets\\crossconnect-self.json and never leaves that machine. Only public keys are shared, in
+pubkeys\\<node>.pub in Flow. Requests older than 60 s, or a nonce seen before, are refused.
 
 approvals.json (in Flow, Jake approves it once) says which caller may run which command on which target, how often.
-Default is deny. Every call, allowed or refused, goes to the audit log. Standard library only.
+Default is deny. Every call, allowed or refused, goes to the audit log. Needs the Python `cryptography` package.
 """
 import argparse
+import base64
 import collections
 import datetime as dt
 import hashlib
-import hmac
 import json
 import os
 import shutil
@@ -63,8 +64,50 @@ def load_json(path, default=None):
         raise
 
 
-def sign(key, body):
-    return hmac.new(key.encode() if isinstance(key, str) else key, body, hashlib.sha256).hexdigest()
+def make_key():
+    """(private PEM text, public key base64). The PEM is a secret; the public key is safe to publish."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    k = Ed25519PrivateKey.generate()
+    pem = k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                          serialization.NoEncryption()).decode()
+    return pem, public_of(k)
+
+
+def public_of(private_key):
+    from cryptography.hazmat.primitives import serialization
+    raw = private_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    return base64.b64encode(raw).decode()
+
+
+def load_private(pem):
+    from cryptography.hazmat.primitives import serialization
+    return serialization.load_pem_private_key(pem.encode(), password=None)
+
+
+def sign(private_key, body):
+    return base64.b64encode(private_key.sign(body)).decode()
+
+
+def signature_ok(public_b64, body, sig):
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    try:
+        Ed25519PublicKey.from_public_bytes(base64.b64decode(public_b64, validate=True)).verify(
+            base64.b64decode(sig, validate=True), body)
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+
+
+def load_public_keys(folder):
+    """{node: public key base64} from pubkeys\\<node>.pub."""
+    keys = {}
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if name.endswith('.pub'):
+            with open(os.path.join(folder, name), encoding='utf-8') as f:
+                keys[name[:-4]] = f.read().strip()
+    return keys
 
 
 def sha256_file(path):
@@ -175,7 +218,7 @@ class Node:
         self.cfg = config
         self.name = config['node']
         self.approvals = approvals
-        self.peer_keys = peer_keys       # {caller: key}; never logged
+        self.peer_keys = peer_keys       # {caller: public key base64}
         self.state_dir = state_dir
         os.makedirs(state_dir, exist_ok=True)
         self.limits = Limits(os.path.join(state_dir, 'limits.json'))
@@ -195,7 +238,7 @@ class Node:
             raise Refused('body is not JSON')
         caller, cmd = req.get('caller'), req.get('cmd')
         key = self.peer_keys.get(caller)
-        if not key or not sig or not sig.isascii() or not hmac.compare_digest(sign(key, body), sig):
+        if not key or not sig or not signature_ok(key, body, sig):
             raise Refused('bad signature or unknown caller')
         if abs(time.time() - float(req.get('ts') or 0)) > SKEW_S:
             raise Refused('request expired (older than 60 s or clock off)')
@@ -370,12 +413,24 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--config', default=os.path.join(HERE, 'node.json'))
     ap.add_argument('--approvals', default=os.path.join(HERE, 'approvals.json'))
-    ap.add_argument('--keys', default='C:\\Jarvis\\secrets\\crossconnect-peers.json' if WINDOWS else
-                    os.path.join(HERE, 'peers.json'))
+    ap.add_argument('--pubkeys', default=os.path.join(HERE, 'pubkeys'))
+    ap.add_argument('--self-key', default='C:\\Jarvis\\secrets\\crossconnect-self.json' if WINDOWS else
+                    os.path.join(HERE, 'self.json'))
+    ap.add_argument('--make-key', metavar='NODE',
+                    help="make this machine's key pair once (refuses to overwrite), print the PUBLIC key, then exit")
     ap.add_argument('--state', default=os.path.join(HERE, 'state'))
     a = ap.parse_args(argv)
+    if a.make_key:
+        if os.path.exists(a.self_key):
+            sys.exit(f'{a.self_key} already exists; not overwriting it')
+        pem, pub = make_key()
+        fd = os.open(a.self_key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump({'node': a.make_key, 'pem': pem}, f)
+        print(pub)
+        return
     cfg = load_json(a.config)
-    node = Node(cfg, load_json(a.approvals), load_json(a.keys), a.state)
+    node = Node(cfg, load_json(a.approvals), load_public_keys(a.pubkeys), a.state)
     bind = cfg.get('bind')
     if not bind or not bind.startswith('100.'):
         sys.exit('node.json "bind" must be this machine\'s tailnet address (100.x.y.z); refusing to listen elsewhere')

@@ -5,9 +5,9 @@
   python client.py junk restart_pc
   python client.py 5060 wake --peer rig
 
-The hub (app buttons), Tars (voice), the board wipe and the card lane all use call(). This machine's own key is in
-C:\\Jarvis\\secrets\\crossconnect-self.json as {"node": "<this machine>", "key": "..."}; it is never printed.
-Standard library only.
+The hub (app buttons), Tars (voice), the board wipe and the card lane all use call(). This machine's private key is in
+C:\\Jarvis\\secrets\\crossconnect-self.json as {"node": "<this machine>", "pem": "..."} (made by
+node_agent.py --make-key); it never leaves the machine and is never printed. Needs the `cryptography` package.
 """
 import argparse
 import json
@@ -20,7 +20,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from node_agent import PORT, sign  # noqa: E402
+from node_agent import PORT, load_private, sign  # noqa: E402
 
 PEERS = {   # node name -> tailnet address; the same names approvals.json uses
     '5060': '100.85.255.99',
@@ -34,7 +34,7 @@ SELF_KEY = 'C:\\Jarvis\\secrets\\crossconnect-self.json' if os.name == 'nt' else
 def load_self(path=SELF_KEY):
     with open(path, encoding='utf-8') as f:
         me = json.load(f)
-    return me['node'], me['key']
+    return me['node'], load_private(me['pem'])
 
 
 def build(caller, key, cmd, args=None):

@@ -12,7 +12,8 @@ command needs his words again. Deleting, spending, posting, and widening `approv
 | `client.py` | Sign and send one command: `python client.py junk restart_service --name searxng` |
 | `approvals.json` | Who may run what on whom, and how often. Default deny |
 | `examples/node.*.json` | Per-machine config: tailnet bind address, services, wake routes, fixes, logs |
-| `test_node_agent.py` | 20 tests; the command runner is a recorder, so nothing is ever restarted |
+| `pubkeys/<node>.pub` | Each machine's PUBLIC key. Private keys never leave their machine |
+| `test_node_agent.py` | 22 tests; the command runner is a recorder, so nothing is ever restarted |
 | `sandbox-test.cmd` | The Docker sandbox run on the rig (Jake's rule for medium-risk code) |
 
 ## Commands
@@ -30,9 +31,10 @@ Only commands that actually ran count toward a limit. Past the daily limit the a
 
 ## Safety
 
-- Requests are signed with the caller's key (HMAC-SHA256), expire after 60 s, and are single-use (nonce).
-  Keys live only in `C:\Jarvis\secrets` (`crossconnect-self.json` on the caller, `crossconnect-peers.json` on the
-  receiver). They are never logged, returned or sent between machines.
+- Requests are signed with the caller's Ed25519 private key, expire after 60 s, and are single-use (nonce).
+  Each machine makes its key pair once (`node_agent.py --make-key <node>`). The private half stays in
+  `C:\Jarvis\secrets\crossconnect-self.json` and never leaves the machine. Only public keys are shared, in
+  `pubkeys/`, so no secret is ever copied between machines. Needs the Python `cryptography` package.
 - The agent refuses to start unless `bind` is the machine's 100.x tailnet address.
 - A machine paused in fleet control (`C:\Jarvis\fleet\paused.flag`) or with `off.txt` beside the agent answers
   `status` only.

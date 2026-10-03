@@ -18,7 +18,10 @@ sys.path.insert(0, HERE)
 import client  # noqa: E402
 import node_agent as na  # noqa: E402
 
-KEYS = {'5060': 'k-5060-test', 'rig': 'k-rig-test', 'junk': 'k-junk-test'}
+PEMS = {n: na.make_key()[0] for n in ('5060', 'rig', 'junk', 'stranger')}
+KEYS = {n: na.load_private(p) for n, p in PEMS.items()}            # private keys, by node
+PUBLIC = {n: na.public_of(k) for n, k in KEYS.items() if n != 'stranger'}
+WRONG = na.load_private(na.make_key()[0])
 
 
 class Recorder:
@@ -40,7 +43,7 @@ def make_node(name='junk', cfg_extra=None, runner=None, **kw):
     cfg.update(cfg_extra or {})
     with open(os.path.join(HERE, 'approvals.json'), encoding='utf-8') as f:
         approvals = json.load(f)
-    node = na.Node(cfg, approvals, dict(KEYS), os.path.join(tmp, 'state'), runner=runner or Recorder(), **kw)
+    node = na.Node(cfg, approvals, dict(PUBLIC), os.path.join(tmp, 'state'), runner=runner or Recorder(), **kw)
     return node, tmp
 
 
@@ -66,7 +69,7 @@ class AuthTests(unittest.TestCase):
         self.assertIn('searxng', out['services'])
 
     def test_bad_signature_refused(self):
-        code, out = send(self.node, '5060', 'status', key='wrong')
+        code, out = send(self.node, '5060', 'status', key=WRONG)
         self.assertEqual((code, out['error']), (403, 'bad signature or unknown caller'))
 
     def test_non_ascii_signature_refused(self):
@@ -74,7 +77,7 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(self.node.handle(body, 'caf\u00e9')[0], 403)
 
     def test_unknown_caller_refused(self):
-        code, _ = send(self.node, 'stranger', 'status', key='whatever')
+        code, _ = send(self.node, 'stranger', 'status')
         self.assertEqual(code, 403)
 
     def test_replay_refused(self):
@@ -101,12 +104,12 @@ class AuthTests(unittest.TestCase):
 
     def test_audit_never_holds_keys(self):
         send(self.node, '5060', 'status')
-        send(self.node, '5060', 'status', key='wrong')
+        send(self.node, '5060', 'status', key=WRONG)
         with open(self.node.audit_path, encoding='utf-8') as f:
             log = f.read()
         self.assertEqual(log.count('\n'), 2)
-        for k in KEYS.values():
-            self.assertNotIn(k, log)
+        for pem in PEMS.values():
+            self.assertNotIn(pem.splitlines()[1], log)
 
 
 class CommandTests(unittest.TestCase):
@@ -240,18 +243,38 @@ class HttpTests(unittest.TestCase):
         self.assertIn('approvals.json', out['error'])
 
     def test_unreachable_is_reported_not_raised(self):
-        out = client.call('127.0.0.1:1', 'status', me=('5060', 'k'), timeout=1)
+        out = client.call('127.0.0.1:1', 'status', me=('5060', KEYS['5060']), timeout=1)
         self.assertFalse(out['ok'])
 
     def test_bind_must_be_tailnet(self):
         cfg = os.path.join(self.tmp, 'node.json')
         with open(cfg, 'w') as f:
             json.dump({'node': 'junk', 'bind': '0.0.0.0'}, f)
-        keys = os.path.join(self.tmp, 'keys.json')
-        with open(keys, 'w') as f:
-            json.dump(KEYS, f)
         with self.assertRaises(SystemExit):
-            na.main(['--config', cfg, '--keys', keys, '--state', os.path.join(self.tmp, 's')])
+            na.main(['--config', cfg, '--pubkeys', self.tmp, '--state', os.path.join(self.tmp, 's')])
+
+    def test_make_key_never_overwrites_and_prints_only_public(self):
+        import contextlib
+        import io
+        path = os.path.join(self.tmp, 'self.json')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            na.main(['--make-key', 'rig', '--self-key', path])
+        pub = out.getvalue().strip()
+        with open(path, encoding='utf-8') as f:
+            me = json.load(f)
+        self.assertEqual(me['node'], 'rig')
+        self.assertNotIn('PRIVATE', out.getvalue())
+        self.assertEqual(na.public_of(na.load_private(me['pem'])), pub)
+        with self.assertRaises(SystemExit):
+            na.main(['--make-key', 'rig', '--self-key', path])
+
+    def test_public_keys_folder(self):
+        folder = os.path.join(self.tmp, 'pubkeys')
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'rig.pub'), 'w') as f:
+            f.write(PUBLIC['rig'] + '\n')
+        self.assertEqual(na.load_public_keys(folder), {'rig': PUBLIC['rig']})
 
 
 if __name__ == '__main__':
