@@ -23,3 +23,18 @@ Write while the Worker is idle (autonomy\*.py is under the self-edit guard), the
 Undo: `--revert`, or `JARVIS_FOLLOWUP_PARK=off`.
 Tested here on the 5060's pre-fix copy and on a CRLF copy: check, apply, 6/6 tests, then a second run says
 "already installed". Line endings are kept.
+
+## Rig fork (added 10/03 20:00Z)
+The rig's `autotask.py` differs from the 5060's: it uses clock.py and dedupe.py, its cap resets at 8 PM ET, and it
+labels past-cap cards `sched:deferred` for scheduler.py. So `--check` on the rig failed on the 5060 blocks.
+`rig-orig/` is the rig's live copy (pushed read-only from the rig), and `rig-patch/` is that copy with the same rule.
+The installer tries `orig/` first, then `rig-orig/`, and prints which one matched. The commands are unchanged.
+
+On the rig, a parked follow-up:
+- is filed as before, then `ghq.snooze_until(n, 'time', <next 06:00>, 'rig', ...)` sets status:snoozed and posts the
+  one comment. It gets `preapproved` and no `sched:deferred`, and no "Filed for Jake" comment.
+- falls back to the old behaviour (staged + `sched:deferred`) if the snooze fails, so nothing is ever lost.
+- wakes at 06:00 ET, not at the rig's 8 PM reset, the same as the 5060 (Claude's day shift starts at 06:00).
+
+Rig test: `python test_followup_park_rig.py` (10 checks, with ghq, classify and dedupe faked). Run here on the rig's
+copy with LF and CRLF line endings: check → apply → 10/10 → "already installed" → --revert is byte-identical.

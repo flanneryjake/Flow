@@ -16,8 +16,8 @@ On 10/03 about 288 follow-ups landed on Jake after the shared 100/day cap was hi
     python apply_followup_park.py --revert              put the newest -fp backup back
     python apply_followup_park.py --dir D:\x\autonomy   another folder
 
-Patches by context: each changed block from orig\ -> patch\ (the 5060's before/after) must be found exactly once in
-the target, or nothing is written. Keeps the file's line endings. Off switch after applying: JARVIS_FOLLOWUP_PARK=off.
+Patches by context: each changed block from orig\ -> patch\ (the 5060's before/after), or rig-orig\ -> rig-patch\ (the
+rig's), must be found exactly once in the target, or nothing is written. Keeps the file's line endings. Off switch after applying: JARVIS_FOLLOWUP_PARK=off.
 The Worker's self-edit guard covers C:\Jarvis\autonomy\*.py: write while the Worker is idle (or with Jake's OK touch
 C:\Jarvis\audit\fixes-running.flag first), then restart the Worker. Test: python test_followup_park.py <autonomy dir>
 """
@@ -33,6 +33,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = 'autotask.py'
 TAG = 'followup-park 10/03'
+KITS = (('orig', 'patch'), ('rig-orig', 'rig-patch'))
 
 
 def _read(path):
@@ -85,9 +86,16 @@ def main(argv=None):
     if TAG in cur:
         print(f'{NAME}: already installed')
         return 0
-    _, old = _read(os.path.join(HERE, 'orig', NAME))
-    _, new = _read(os.path.join(HERE, 'patch', NAME))
-    out, bad = patch_text(cur, old, new)
+    out = bad = None
+    for before, after in KITS:   # the 5060's fork first, then the rig's (its autotask.py differs: clock.py, sched:deferred)
+        if not os.path.exists(os.path.join(HERE, before, NAME)):
+            continue
+        _, old = _read(os.path.join(HERE, before, NAME))
+        _, new = _read(os.path.join(HERE, after, NAME))
+        out, bad = patch_text(cur, old, new)
+        if out is not None:
+            print(f'{NAME}: matched the {before}/ copy')
+            break
     if out is None:
         print(f'{NAME}: a block did not match exactly once on this PC; nothing written.\n---\n{bad}')
         return 1
