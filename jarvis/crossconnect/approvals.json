@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "approved": {"by": "Jake", "at": "2026-10-03T16:38:54Z", "words": "Approve the machine command list as soon as it hits, it has my ok"},
+  "note": "Who may run what on whom. Default deny. Jake approves this file once; widening it (a new caller, command or a looser limit) needs his PIN. Limits are per target machine.",
+  "rules": [
+    {"caller": "*", "target": "*", "cmd": "status"},
+    {"caller": ["5060", "rig"], "target": "*", "cmd": "logs", "limit": {"min_gap_min": 0, "per_day": 200}},
+    {"caller": ["5060", "rig"], "target": "*", "cmd": "restart_service", "limit": {"min_gap_min": 10, "per_day": 12}},
+    {"caller": ["5060", "rig"], "target": "*", "cmd": "run_fix", "limit": {"min_gap_min": 10, "per_day": 10}},
+    {"caller": ["5060", "rig", "junk", "hal9000"], "target": "*", "cmd": "wake", "limit": {"min_gap_min": 5, "per_day": 24}},
+    {"caller": "5060", "target": ["junk", "rig"], "cmd": "restart_pc", "limit": {"min_gap_min": 30, "per_day": 4}},
+    {"caller": "rig", "target": ["5060", "junk"], "cmd": "restart_pc", "limit": {"min_gap_min": 30, "per_day": 4}}
+  ]
+}

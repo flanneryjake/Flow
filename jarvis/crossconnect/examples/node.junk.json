@@ -1,0 +1,29 @@
+{
+  "node": "junk",
+  "bind": "100.90.201.22",
+  "port": 8799,
+  "pause_flag": "C:\\Jarvis\\fleet\\paused.flag",
+  "busy_flag": null,
+  "services": {
+    "home-assistant": {
+      "port": 8123,
+      "host": "100.90.201.22"
+    },
+    "mosquitto": {
+      "port": 1883,
+      "host": "100.90.201.22"
+    },
+    "searxng": {
+      "port": 8888,
+      "host": "100.90.201.22"
+    },
+    "wake-relay": {
+      "port": 8767
+    }
+  },
+  "wake": {},
+  "fixes": {},
+  "logs": {
+    "remote-control": "C:\\Jarvis\\logs\\remote-control.log"
+  }
+}

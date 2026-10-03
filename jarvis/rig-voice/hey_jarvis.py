@@ -26,6 +26,7 @@ PORT = int(os.environ.get("HEY_JARVIS_PORT", "8796"))
 HOME = os.environ.get("HEY_JARVIS_HOME", r"C:\Jarvis\rig-voice")
 # HA webhook that speaks on an Echo (packages/rig_voice.yaml); JARVIS_ECHO picks the Echo in the rig's room.
 ECHO = os.environ.get("JARVIS_ECHO", "media_player.kitchen")
+HOLD_S = 8.0          # TARS slower than this = it is looking something up; say a holding line
 HA_WEBHOOKS = os.environ.get("JARVIS_HA_WEBHOOKS", "http://100.90.201.22:8123/api/webhook/")  # only HA may set say_url
 FOLLOW_UP_S = 20
 MIC = os.environ.get("JARVIS_MIC", "fifine")   # part of the input device's name; the rig's Fifine USB mic
@@ -94,11 +95,34 @@ def serve(port=PORT):
 
 # ---------------------------------------------------------------- speech pieces
 
-def ask_tars(text, url=TARS_URL, timeout=90):
+def ask_tars(text, url=TARS_URL, timeout=180):   # a Claude lookup can take a minute or two
     req = urllib.request.Request(url, data=json.dumps({"text": text}).encode(), method="POST",
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return (json.loads(r.read()).get("reply") or "").strip()
+
+
+def ask_with_holding_line(text, wait=HOLD_S, ask=None, say=None):
+    """Ask TARS; if it is still thinking after `wait` s (a web or Claude lookup), say "One moment" meanwhile."""
+    ask, say = ask or ask_tars, say or speak
+    out = {}
+
+    def worker():
+        try:
+            out["reply"] = ask(text)
+        except Exception as e:  # noqa: BLE001
+            log(f"TARS failed: {e}")
+            out["reply"] = "My apologies, sir. Tars on the laptop isn't answering right now."
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    t.join(wait)
+    if t.is_alive():
+        try:
+            say("One moment, sir.")
+        except Exception as e:  # noqa: BLE001
+            log(f"Echo failed: {e}")
+        t.join()
+    return out["reply"]
 
 
 def rms(chunk):
@@ -225,11 +249,7 @@ def run(once=False):
         if len(text) < 3:
             continue
         log(f"heard {len(text.split())} words")
-        try:
-            reply = ask_tars(text)
-        except Exception as e:  # noqa: BLE001
-            log(f"TARS failed: {e}")
-            reply = "Sorry Jake, TARS on the laptop isn't answering right now."
+        reply = ask_with_holding_line(text)
         try:
             talking = speak(reply[:400])
         except Exception as e:  # noqa: BLE001

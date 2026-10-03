@@ -1,0 +1,99 @@
+# Jarvis on Tars (the 5060) controls and reads the apartment through HA.
+# - Every 2 min HA pushes a small state snapshot (alarms, what's playing, listening switch, lights/switches) to Tars,
+#   together with the private webhook URL Tars sends home commands to. No HA token ever leaves this box.
+# - Tars sends {"kind": "alexa", "echo": "media_player.kitchen", "command": "play jazz on spotify"}: HA runs it as an
+#   Alexa voice command on that Echo (lights, music, alarms, timers all work the way they do by voice).
+#   Buying, ordering, calling and messaging are refused here as well as on Tars.
+#   {"kind": "listening", "on": true|false} flips the "Jarvis listening" switch.
+# secrets.yaml needs (random id, made once on this box):
+#   tars_home_webhook_id: "jarvis_tars_home_<random>"
+#   tars_home_url: "http://100.90.201.22:8123/api/webhook/jarvis_tars_home_<random>"
+
+rest_command:
+  jarvis_tars_home_push:
+    url: "http://100.85.255.99:8790/ha"
+    method: POST
+    content_type: application/json
+    payload: >-
+      {% set ns = namespace(dev={}) %}
+      {% for s in (states.light | list) + (states.switch | list) + (states.fan | list) %}
+        {% if ns.dev | length < 25 and s.state in ['on', 'off'] %}
+          {% set ns.dev = dict(ns.dev, **{s.entity_id: s.name ~ ': ' ~ s.state}) %}
+        {% endif %}
+      {% endfor %}
+      {% set ns2 = namespace(e={}) %}
+      {% for e in ['media_player.kitchen', 'media_player.master_bedroom'] %}
+        {% set ns2.e = dict(ns2.e, **{e: {
+             'state': states(e),
+             'title': state_attr(e, 'media_title'),
+             'artist': state_attr(e, 'media_artist'),
+             'volume': state_attr(e, 'volume_level')}}) %}
+      {% endfor %}
+      {{ {"home_url": home_url,
+          "at": now().isoformat(),
+          "listening": is_state('input_boolean.jarvis_listening', 'on'),
+          "next_alarm_bedroom": states('sensor.master_bedroom_next_alarm'),
+          "next_alarm_kitchen": states('sensor.kitchen_next_alarm'),
+          "echos": ns2.e,
+          "devices": ns.dev} | to_json }}
+    timeout: 5
+
+automation:
+  - id: jarvis_tars_home_push
+    alias: Send Tars the home snapshot
+    mode: restart
+    triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: time_pattern
+        minutes: "/2"
+      - trigger: state
+        entity_id:
+          - input_boolean.jarvis_listening
+          - media_player.kitchen
+          - media_player.master_bedroom
+          - sensor.master_bedroom_next_alarm
+    actions:
+      - action: rest_command.jarvis_tars_home_push
+        data:
+          home_url: !secret tars_home_url
+        continue_on_error: true
+
+  - id: jarvis_tars_home_command
+    alias: Run Jarvis home commands from Tars
+    mode: queued
+    max: 5
+    triggers:
+      - trigger: webhook
+        webhook_id: !secret tars_home_webhook_id
+        allowed_methods: [POST]
+        local_only: false        # Tars reaches HA over the tailnet
+    actions:
+      - choose:
+          - conditions:
+              - condition: template   # must render True/False
+                value_template: >-
+                  {% set j = trigger.json or {} %}
+                  {% set cmd = (j.get('command') or '') | string | lower %}
+                  {{ j.get('kind') == 'alexa'
+                     and j.get('echo') in integration_entities('alexa_media')
+                     and 2 < cmd | length < 200
+                     and not (cmd is search('\\b(buy|order|purchase|reorder|checkout|cart|pay|call|drop in|message|text|send|email|unlock|disarm|delete)\\b')) }}
+            sequence:
+              - action: media_player.play_media
+                target:
+                  entity_id: "{{ trigger.json.echo }}"
+                data:
+                  media_content_type: custom
+                  media_content_id: "{{ trigger.json.command[:200] }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ (trigger.json or {}).get('kind') == 'listening' and (trigger.json or {}).get('on') in [true, false] }}"
+            sequence:
+              - action: "input_boolean.turn_{{ 'on' if trigger.json.on else 'off' }}"
+                target:
+                  entity_id: input_boolean.jarvis_listening
+      - action: rest_command.jarvis_tars_home_push    # report the new state right away
+        data:
+          home_url: !secret tars_home_url
+        continue_on_error: true
