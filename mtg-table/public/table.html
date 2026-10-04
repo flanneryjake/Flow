@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MTG Table</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="table">
+<header class="topbar">
+  <strong id="roomName">MTG Table</strong>
+  <button id="invite" title="Copy the room link to send to a friend">Copy invite link</button>
+  <div id="players" class="players"></div>
+  <div class="spacer"></div>
+  <button id="deckBtn">Load deck</button>
+  <button id="drawBtn" title="Draw (D)">Draw</button>
+  <button id="untapBtn" title="Untap all (U)">Untap all</button>
+  <button id="moreBtn">More ▾</button>
+</header>
+
+<div class="layout">
+  <div class="tablearea">
+    <div id="opponents" class="opponents"></div>
+    <div id="battlefield" class="battlefield" aria-label="Battlefield"></div>
+    <div class="mine">
+      <div id="myPiles" class="piles"></div>
+      <div id="hand" class="hand" aria-label="Your hand"></div>
+    </div>
+  </div>
+  <aside class="side">
+    <div id="preview" class="preview"><p class="muted small">Hover a card to see it large.</p></div>
+    <div id="log" class="log"></div>
+    <form id="chat" class="chatform"><input id="chatText" placeholder="Chat or note…" autocomplete="off"></form>
+  </aside>
+</div>
+
+<div id="menu" class="menu" hidden></div>
+
+<dialog id="joinDlg">
+  <form method="dialog">
+    <h2>Join the table</h2>
+    <label>Your name <input id="joinName" maxlength="30" required></label>
+    <menu><button value="ok">Sit down</button></menu>
+  </form>
+</dialog>
+
+<dialog id="deckDlg">
+  <form method="dialog" class="deckform">
+    <h2>Load a deck</h2>
+    <p class="muted small">Paste a list exported from Moxfield, Archidekt or MTGO ("1 Sol Ring"). Put your commander under a "Commander" heading. Loading replaces your current cards.</p>
+    <textarea id="deckText" rows="16" placeholder="Commander&#10;1 Urza, Lord High Artificer&#10;&#10;Deck&#10;1 Sol Ring&#10;1 Myr Retriever&#10;..."></textarea>
+    <p id="deckStatus" class="muted small"></p>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button id="deckGo" value="ok">Load</button></menu>
+  </form>
+</dialog>
+
+<dialog id="zoneDlg">
+  <form method="dialog">
+    <h2 id="zoneTitle">Zone</h2>
+    <div id="zoneCards" class="zonecards"></div>
+    <menu><button value="close">Close</button></menu>
+  </form>
+</dialog>
+
+<script src="/deck.js"></script>
+<script src="/table.js"></script>
+</body>
+</html>

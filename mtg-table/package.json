@@ -1,0 +1,14 @@
+{
+  "name": "mtg-table",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private, link-only Magic: The Gathering table for friends (table mode).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
