@@ -22,7 +22,7 @@ The spec is in jarvis-outputs, `brains/supervision.md` (commit 8cdcc07). This fi
 ## 2. TARS: write its own agenda
 
 - TARS appends its items to `C:\Jarvis\state\supervision\tars-<YYYY-MM-DD>.jsonl`, using the spec's format with `model: "tars"`.
-- No more than 5 items may be open at once. When a 6th comes in, it is carried, not dropped.
+- There is no cap on open items (Jake, 10/04 00:45Z; spec 8f1c1db). Rank them with stuck items and risky questions first. Claude flags 7 or more to Jake at the check-in, so supervision.py does not.
 - TARS adds an item when:
   - a /chat turn ends with "I'm not sure",
   - a card is stuck, or
