@@ -13,6 +13,12 @@ The spec is in jarvis-outputs, `brains/supervision.md` (commit 8cdcc07). This fi
   - the publisher pushes at most once a minute
 - Every line must parse as JSON, and `kind` must be one of question, stuck, resource, unsure, learned or answer. If either check fails, reject the post with a 400.
 
+## 1b. Hub: accept the rig's perf metrics
+
+- Add the routine `jarvis-perf` to `/api/state/marker`.
+- It writes `state/jarvis-perf-<YYYY-MM-DD>.json`. This is the rig's 6:40 AM "Jarvis Brain Perf Metrics" task, which gets a 400 today.
+- The file must be numbers-only JSON, with the same rig-only, 256 KB and secret-scan rules as other markers.
+
 ## 2. TARS: write its own agenda
 
 - TARS appends its items to `C:\Jarvis\state\supervision\tars-<YYYY-MM-DD>.jsonl`, using the spec's format with `model: "tars"`.
@@ -32,6 +38,7 @@ The spec is in jarvis-outputs, `brains/supervision.md` (commit 8cdcc07). This fi
 ## Done when
 
 - A test POST from the rig of a jarvis agenda line lands in jarvis-outputs.
+- A test jarvis-perf post from the rig lands in jarvis-outputs.
 - One TARS test item lands in `tars-<date>.jsonl` in jarvis-outputs.
 - A bad path or bad kind is rejected.
 - Unit tests pass.
