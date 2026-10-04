@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MTG Table</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="lobby">
+<main class="lobby-card">
+  <h1>MTG Table</h1>
+  <p class="muted">A private table for playing Magic with friends. Only people with a room link can join.</p>
+
+  <section id="keybox">
+    <label>Host key <input id="key" type="password" autocomplete="current-password" placeholder="Paste the host key"></label>
+    <button id="unlock">Unlock</button>
+    <p class="muted small">Have a room link from a friend? Just open it, no key needed.</p>
+  </section>
+
+  <section id="host" hidden>
+    <h2>New table</h2>
+    <div class="row">
+      <input id="rname" placeholder="Table name" value="Commander night">
+      <select id="format">
+        <option value="commander">Commander (40 life)</option>
+        <option value="standard">60-card (20 life)</option>
+      </select>
+      <button id="create">Create</button>
+    </div>
+    <h2>Your tables</h2>
+    <ul id="rooms" class="rooms"></ul>
+  </section>
+  <p id="err" class="err"></p>
+</main>
+<script src="/lobby.js"></script>
+</body>
+</html>
